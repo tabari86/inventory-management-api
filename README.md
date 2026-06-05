@@ -10,7 +10,6 @@ A backend API for managing products, warehouses and stock movements in a simple 
 This project is built as a realistic backend portfolio project.
 The focus is not on creating a tutorial application, but on showing clean API design, business logic, database usage and a maintainable project structure.
 
-
 ## Tech Stack
 
 * Node.js
@@ -28,16 +27,19 @@ Current features:
 
 * Express server setup
 * MongoDB connection using environment variables
-* Product model
+* Product model with business-focused fields
 * Create product endpoint
+* Product listing endpoint
+* Product detail endpoint
+* Product update endpoint
+* Product deactivation endpoint
+* Product deletion with business rules
 * Required field validation
 * Duplicate SKU validation
 * Basic API error handling
 
 Planned features:
 
-* Product listing
-* Product details
 * Warehouse management
 * Stock tracking
 * Goods receipt process
@@ -46,13 +48,22 @@ Planned features:
 * Swagger API documentation
 * Docker setup
 
---- 
+---
 
 ## API Endpoints
 
 ### Products
 
-#### Create Product
+| Method | Endpoint                       | Description                |
+| ------ | ------------------------------ | -------------------------- |
+| POST   | `/api/products`                | Create a new product       |
+| GET    | `/api/products`                | Retrieve all products      |
+| GET    | `/api/products/:id`            | Retrieve a single product  |
+| PATCH  | `/api/products/:id`            | Update product information |
+| PATCH  | `/api/products/:id/deactivate` | Deactivate a product       |
+| DELETE | `/api/products/:id`            | Delete an inactive product |
+
+### Create Product
 
 ```http
 POST /api/products
@@ -80,7 +91,41 @@ Possible responses:
 500 Internal Server Error
 ```
 
---- 
+### Update Product
+
+```http
+PATCH /api/products/:id
+```
+
+Updates selected product fields.
+
+Possible responses:
+
+```http
+200 OK
+400 Bad Request
+404 Not Found
+409 Conflict
+500 Internal Server Error
+```
+
+### Deactivate Product
+
+```http
+PATCH /api/products/:id/deactivate
+```
+
+Sets the product status to `inactive`.
+
+### Delete Product
+
+```http
+DELETE /api/products/:id
+```
+
+Deletes a product only if it is already inactive.
+
+---
 
 ## Example Requests
 
@@ -118,7 +163,47 @@ Example duplicate SKU response:
 }
 ```
 
---- 
+### Update product
+
+```json
+{
+  "description": "Updated business laptop description"
+}
+```
+
+Example success response:
+
+```json
+{
+  "message": "Product updated successfully"
+}
+```
+
+### Deactivate product
+
+```json
+{
+  "message": "Product deactivated successfully"
+}
+```
+
+### Delete inactive product
+
+```json
+{
+  "message": "Product deleted successfully"
+}
+```
+
+Example delete conflict response:
+
+```json
+{
+  "message": "Active products must be deactivated before deletion"
+}
+```
+
+---
 
 ## Project Structure
 
@@ -149,7 +234,8 @@ inventory-management-api
 ├── package.json
 └── README.md
 ```
---- 
+
+---
 
 ## Architecture Overview
 
@@ -169,11 +255,9 @@ Database
 
 Routes define the API endpoints and forward requests to the correct controller.
 
----
-
 ### Controllers
 
-Controllers handle incoming requests, validate basic input and return HTTP responses.
+Controllers handle incoming requests, validate input, apply basic business rules and return HTTP responses.
 
 ### Models
 
@@ -184,6 +268,8 @@ Models define the MongoDB data structure using Mongoose schemas.
 The config layer contains reusable configuration code, such as the MongoDB connection.
 
 This structure keeps the project understandable and avoids unnecessary complexity.
+
+---
 
 ## Environment Variables
 
@@ -217,26 +303,35 @@ The server should start on:
 ```text
 http://localhost:3000
 ```
+
 ---
 
 ## Current Status
 
 Implemented:
 
-* Product creation endpoint
+* Product management API
+* Product creation
+* Product listing
+* Product detail endpoint
+* Product update endpoint
+* Product deactivation
+* Product deletion with business rules
 * MongoDB integration
-* SKU uniqueness validation
 * Environment-based configuration
 
-In Progress:
-
-* Product retrieval endpoints
-
-Planned:
+Next planned step:
 
 * Warehouse management
+
+Planned later:
+
 * Stock tracking
-* Stock movementst
+* Goods receipt process
+* Goods issue process
+* Stock movement history
+* Swagger API documentation
+* Docker setup
 
 ---
 
@@ -262,6 +357,10 @@ Current product rules:
 * Each product must have a name.
 * Product unit is limited to predefined values.
 * New products are active by default.
+* Products can be updated partially.
+* Products should be deactivated before deletion.
+* Active products cannot be deleted.
+* Only inactive products can be deleted.
 
 Supported product units:
 
@@ -271,21 +370,23 @@ kg
 liter
 meter
 ```
- --- 
+
+---
 
 ## Roadmap
 
 Planned development order:
 
-1. Product listing
-2. Product details
-3. Warehouse model
+1. Product management
+2. Warehouse model
+3. Warehouse API endpoints
 4. Stock model
-5. Goods receipt
-6. Goods issue
+5. Goods receipt process
+6. Goods issue process
 7. Stock movement history
 8. Swagger documentation
 9. Docker setup
+
 ---
 
 ## Why this project matters
@@ -300,7 +401,8 @@ This project demonstrates backend skills that are relevant for roles such as:
 * Integration Developer
 * Junior Software Developer
 
-The project is especially focused on practical backend logic instead of frontend design.
+The project is focused on practical backend logic instead of frontend design.
+It shows how product data can be managed with validation, clear API endpoints and basic business rules.
 
 ---
 
