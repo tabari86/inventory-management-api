@@ -27,24 +27,20 @@ Current features:
 
 * Express server setup
 * MongoDB connection using environment variables
-* Product model with business-focused fields
-* Create product endpoint
-* Product listing endpoint
-* Product detail endpoint
-* Product update endpoint
-* Product deactivation endpoint
-* Product deletion with business rules
+* Product management API
+* Warehouse management API
 * Required field validation
-* Duplicate SKU validation
+* Duplicate SKU and warehouse code validation
+* Product deactivation and controlled deletion
+* Warehouse deactivation without deletion
 * Basic API error handling
 
 Planned features:
 
-* Warehouse management
-* Stock tracking
+* Stock model
+* Stock movement history
 * Goods receipt process
 * Goods issue process
-* Stock movement history
 * Swagger API documentation
 * Docker setup
 
@@ -63,67 +59,17 @@ Planned features:
 | PATCH  | `/api/products/:id/deactivate` | Deactivate a product       |
 | DELETE | `/api/products/:id`            | Delete an inactive product |
 
-### Create Product
+### Warehouses
 
-```http
-POST /api/products
-```
+| Method | Endpoint                         | Description                  |
+| ------ | -------------------------------- | ---------------------------- |
+| POST   | `/api/warehouses`                | Create a new warehouse       |
+| GET    | `/api/warehouses`                | Retrieve all warehouses      |
+| GET    | `/api/warehouses/:id`            | Retrieve a single warehouse  |
+| PATCH  | `/api/warehouses/:id`            | Update warehouse information |
+| PATCH  | `/api/warehouses/:id/deactivate` | Deactivate a warehouse       |
 
-Creates a new product in the inventory system.
-
-Required fields:
-
-* `sku`
-* `name`
-
-Optional fields:
-
-* `description`
-* `unit`
-* `status`
-
-Possible responses:
-
-```http
-201 Created
-400 Bad Request
-409 Conflict
-500 Internal Server Error
-```
-
-### Update Product
-
-```http
-PATCH /api/products/:id
-```
-
-Updates selected product fields.
-
-Possible responses:
-
-```http
-200 OK
-400 Bad Request
-404 Not Found
-409 Conflict
-500 Internal Server Error
-```
-
-### Deactivate Product
-
-```http
-PATCH /api/products/:id/deactivate
-```
-
-Sets the product status to `inactive`.
-
-### Delete Product
-
-```http
-DELETE /api/products/:id
-```
-
-Deletes a product only if it is already inactive.
+Warehouse deletion is intentionally not implemented because warehouses may later be connected to stock records and movement history.
 
 ---
 
@@ -140,62 +86,34 @@ Deletes a product only if it is already inactive.
 }
 ```
 
-Example success response:
+### Create warehouse
 
 ```json
 {
-  "message": "Product created successfully",
-  "data": {
-    "sku": "LAPTOP-001",
-    "name": "Dell Latitude 7450",
-    "description": "Business laptop",
-    "unit": "piece",
-    "status": "active"
-  }
+  "code": "WH-STU",
+  "name": "Main Warehouse",
+  "description": "Primary warehouse for incoming and outgoing goods"
 }
 ```
 
-Example duplicate SKU response:
+### Update warehouse
 
 ```json
 {
-  "message": "A product with this SKU already exists"
+  "name": "Main Warehouse Germany",
+  "description": "Updated warehouse description"
 }
 ```
 
-### Update product
+### Example duplicate warehouse response
 
 ```json
 {
-  "description": "Updated business laptop description"
+  "message": "A warehouse with this code already exists"
 }
 ```
 
-Example success response:
-
-```json
-{
-  "message": "Product updated successfully"
-}
-```
-
-### Deactivate product
-
-```json
-{
-  "message": "Product deactivated successfully"
-}
-```
-
-### Delete inactive product
-
-```json
-{
-  "message": "Product deleted successfully"
-}
-```
-
-Example delete conflict response:
+### Example product delete conflict response
 
 ```json
 {
@@ -215,15 +133,18 @@ inventory-management-api
 │   │   └── database.js
 │   │
 │   ├── controllers
-│   │   └── productController.js
+│   │   ├── productController.js
+│   │   └── warehouseController.js
 │   │
 │   ├── middleware
 │   │
 │   ├── models
-│   │   └── Product.js
+│   │   ├── Product.js
+│   │   └── Warehouse.js
 │   │
 │   ├── routes
-│   │   └── productRoutes.js
+│   │   ├── productRoutes.js
+│   │   └── warehouseRoutes.js
 │   │
 │   ├── services
 │   │
@@ -311,27 +232,22 @@ http://localhost:3000
 Implemented:
 
 * Product management API
-* Product creation
-* Product listing
-* Product detail endpoint
-* Product update endpoint
-* Product deactivation
-* Product deletion with business rules
+* Warehouse management API
 * MongoDB integration
 * Environment-based configuration
+* Business rules for product and warehouse lifecycle
 
-Next planned step:
+Current focus:
 
-* Warehouse management
+* Stock model
+* Stock movements
+* Goods receipt and goods issue workflows
 
 Planned later:
 
-* Stock tracking
-* Goods receipt process
-* Goods issue process
-* Stock movement history
 * Swagger API documentation
 * Docker setup
+* Code quality improvements
 
 ---
 
@@ -362,6 +278,14 @@ Current product rules:
 * Active products cannot be deleted.
 * Only inactive products can be deleted.
 
+Current warehouse rules:
+
+* Each warehouse must have a unique code.
+* Warehouse codes are stored in uppercase.
+* Warehouse codes are treated as business identifiers and are not changed through the update endpoint.
+* Warehouses can be deactivated.
+* Warehouses are not deleted because they may later be linked to stock and stock movement history.
+
 Supported product units:
 
 ```text
@@ -373,14 +297,41 @@ meter
 
 ---
 
+## Inventory Design Principles
+
+Stock quantity will not be changed directly.
+
+Future stock changes will be handled through business processes such as:
+
+* Goods receipt
+* Goods issue
+* Stock movement history
+
+The planned stock model will connect products and warehouses.
+A stock record will represent the quantity of one product in one warehouse.
+
+```text
+Product
+   │
+   ▼
+ Stock
+   ▲
+   │
+Warehouse
+```
+
+Stock movements will document why and how stock quantities changed.
+
+---
+
 ## Roadmap
 
 Planned development order:
 
 1. Product management
-2. Warehouse model
-3. Warehouse API endpoints
-4. Stock model
+2. Warehouse management
+3. Stock model
+4. Stock movement model
 5. Goods receipt process
 6. Goods issue process
 7. Stock movement history
@@ -392,7 +343,7 @@ Planned development order:
 ## Why this project matters
 
 Inventory and warehouse management are common real-world business problems.
-Companies need systems that can manage products, stock levels, goods receipts, goods issues and stock movement history.
+Companies need systems that can manage products, warehouses, stock levels, goods receipts, goods issues and movement history.
 
 This project demonstrates backend skills that are relevant for roles such as:
 
@@ -402,10 +353,23 @@ This project demonstrates backend skills that are relevant for roles such as:
 * Junior Software Developer
 
 The project is focused on practical backend logic instead of frontend design.
-It shows how product data can be managed with validation, clear API endpoints and basic business rules.
+It shows how backend APIs can model real business rules, not only simple CRUD operations.
 
 ---
 
 ## License
 
 This project is currently developed for portfolio purposes.
+
+--- 
+
+## Contact
+
+Moj Tabari
+
+Website: 
+https://mtintelligence.ai
+
+LinkedIn: 
+https://www.linkedin.com/in/mojtaba-tabari
+

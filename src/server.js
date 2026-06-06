@@ -3,6 +3,7 @@ require("dotenv").config();
 
 const connectDatabase = require("./config/database");
 const productRoutes = require("./routes/productRoutes");
+const warehouseRoutes = require("./routes/warehouseRoutes");
 
 const app = express();
 
@@ -17,6 +18,7 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api/products", productRoutes);
+app.use("/api/warehouses", warehouseRoutes);
 
 connectDatabase();
 
