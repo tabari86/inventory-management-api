@@ -361,15 +361,3 @@ It shows how backend APIs can model real business rules, not only simple CRUD op
 
 This project is currently developed for portfolio purposes.
 
---- 
-
-## Contact
-
-Moj Tabari
-
-Website: 
-https://mtintelligence.ai
-
-LinkedIn: 
-https://www.linkedin.com/in/mojtaba-tabari
-
