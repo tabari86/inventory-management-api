@@ -29,6 +29,12 @@ Current features:
 * MongoDB connection using environment variables
 * Product management API
 * Warehouse management API
+* Stock model
+* Stock creation endpoint
+* Stock listing endpoint
+* Stock detail endpoint
+* Product and warehouse validation for stock records
+* Duplicate stock prevention for product and warehouse combinations
 * Required field validation
 * Duplicate SKU and warehouse code validation
 * Product deactivation and controlled deletion
@@ -37,7 +43,6 @@ Current features:
 
 Planned features:
 
-* Stock model
 * Stock movement history
 * Goods receipt process
 * Goods issue process
@@ -70,6 +75,17 @@ Planned features:
 | PATCH  | `/api/warehouses/:id/deactivate` | Deactivate a warehouse       |
 
 Warehouse deletion is intentionally not implemented because warehouses may later be connected to stock records and movement history.
+
+### Stocks
+
+| Method | Endpoint    | Description                                             |
+|--------| ------------------|---------------------------------------------------|
+| POST   | `/api/stocks`     | Create a stock record for a product and warehouse |
+| GET    | `/api/stocks`     | Retrieve all stock records                        |
+| GET    | `/api/stocks/:id` | Retrieve a single stock record                    |
+
+
+Stock quantity is not updated directly through the stock API. Quantity changes will later be handled through stock movement workflows.
 
 ---
 
@@ -121,6 +137,36 @@ Warehouse deletion is intentionally not implemented because warehouses may later
 }
 ```
 
+### Create stock record
+
+```json
+{
+  "productId": "PRODUCT_ID",
+  "warehouseId": "WAREHOUSE_ID"
+}
+```
+### Example success response
+
+```json
+{
+  "message": "Stock record created successfully",
+  "data": {
+    "productId": "PRODUCT_ID",
+    "warehouseId": "WAREHOUSE_ID",
+    "quantity": 0,
+    "status": "active"
+  }
+}
+```
+
+### Example duplicate stock response
+
+```json
+{
+  "message": "Stock record already exists for this product and warehouse"
+}
+```
+
 ---
 
 ## Project Structure
@@ -134,17 +180,20 @@ inventory-management-api
 │   │
 │   ├── controllers
 │   │   ├── productController.js
-│   │   └── warehouseController.js
+│   │   ├── warehouseController.js
+│   │   └── stockController.js
 │   │
 │   ├── middleware
 │   │
 │   ├── models
 │   │   ├── Product.js
-│   │   └── Warehouse.js
+│   │   ├── Warehouse.js
+│   │   └── Stock.js
 │   │
 │   ├── routes
 │   │   ├── productRoutes.js
-│   │   └── warehouseRoutes.js
+│   │   ├── warehouseRoutes.js
+│   │   └── stockRoutes.js
 │   │
 │   ├── services
 │   │
@@ -233,15 +282,16 @@ Implemented:
 
 * Product management API
 * Warehouse management API
+* Stock management API
 * MongoDB integration
 * Environment-based configuration
-* Business rules for product and warehouse lifecycle
+* Business rules for product, warehouse and stock lifecycle
 
 Current focus:
 
-* Stock model
-* Stock movements
-* Goods receipt and goods issue workflows
+* Stock movement domain
+* Goods receipt workflows
+* Goods issue workflow
 
 Planned later:
 
@@ -285,6 +335,17 @@ Current warehouse rules:
 * Warehouse codes are treated as business identifiers and are not changed through the update endpoint.
 * Warehouses can be deactivated.
 * Warehouses are not deleted because they may later be linked to stock and stock movement history.
+
+Current stock rules:
+
+* A stock record connects one product with one warehouse.
+* The combination of product and warehouse must be unique.
+* A stock record can only be created for an active product.
+* A stock record can only be created for an active warehouse.
+* Stock quantity starts at `0`.
+* Stock quantity is not changed directly through the stock API.
+* Future quantity changes must be handled through stock movement workflows.
+* Stock records are created only once for each product and warehouse combination and represent the current inventory state.
 
 Supported product units:
 
