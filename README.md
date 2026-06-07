@@ -7,8 +7,13 @@
 
 A backend API for managing products, warehouses and stock movements in a simple inventory management system.
 
-This project is built as a realistic backend portfolio project.
-The focus is not on creating a tutorial application, but on showing clean API design, business logic, database usage and a maintainable project structure.
+## Project Goal
+
+The goal of this project is to model a realistic inventory and warehouse backend instead of implementing simple CRUD operations.
+
+Inventory changes are handled through business processes that create immutable stock movement records while maintaining the current stock state.
+
+---
 
 ## Tech Stack
 
@@ -27,25 +32,25 @@ Current features:
 
 * Express server setup
 * MongoDB connection using environment variables
+
 * Product management API
 * Warehouse management API
-* Stock model
-* Stock creation endpoint
-* Stock listing endpoint
-* Stock detail endpoint
-* Product and warehouse validation for stock records
-* Duplicate stock prevention for product and warehouse combinations
-* Required field validation
-* Duplicate SKU and warehouse code validation
-* Product deactivation and controlled deletion
-* Warehouse deactivation without deletion
+* Stock management API
+
+* Stock movement tracking API
+* Goods receipt workflow
+* Goods issue workflow
+
+* Product and warehouse validation
+* Duplicate SKU validation
+* Duplicate warehouse code validation
+* Duplicate stock prevention
+
+* Stock quantity management through business processes
 * Basic API error handling
 
 Planned features:
 
-* Stock movement history
-* Goods receipt process
-* Goods issue process
 * Swagger API documentation
 * Docker setup
 
@@ -56,7 +61,7 @@ Planned features:
 ### Products
 
 | Method | Endpoint                       | Description                |
-| ------ | ------------------------------ | -------------------------- |
+| -------|--------------------------------|----------------------------|
 | POST   | `/api/products`                | Create a new product       |
 | GET    | `/api/products`                | Retrieve all products      |
 | GET    | `/api/products/:id`            | Retrieve a single product  |
@@ -67,7 +72,7 @@ Planned features:
 ### Warehouses
 
 | Method | Endpoint                         | Description                  |
-| ------ | -------------------------------- | ---------------------------- |
+| -------|----------------------------------|------------------------------|
 | POST   | `/api/warehouses`                | Create a new warehouse       |
 | GET    | `/api/warehouses`                | Retrieve all warehouses      |
 | GET    | `/api/warehouses/:id`            | Retrieve a single warehouse  |
@@ -78,14 +83,28 @@ Warehouse deletion is intentionally not implemented because warehouses may later
 
 ### Stocks
 
-| Method | Endpoint    | Description                                             |
-|--------| ------------------|---------------------------------------------------|
+| Method | Endpoint          | Description                                       |
+|--------|-------------------|---------------------------------------------------|
 | POST   | `/api/stocks`     | Create a stock record for a product and warehouse |
 | GET    | `/api/stocks`     | Retrieve all stock records                        |
 | GET    | `/api/stocks/:id` | Retrieve a single stock record                    |
 
 
 Stock quantity is not updated directly through the stock API. Quantity changes will later be handled through stock movement workflows.
+
+
+### Goods Receipt
+
+| Method  | Endpoint              | Description                               |
+|---------|-----------------------|-------------------------------------------|
+| POST    | `/api/goods-receipts` | Receive goods and increase stock quantity |
+
+
+### Goods Issue
+
+| Method  | Endpoint            | Description                             |
+|---------| --------------------|-----------------------------------------|
+| POST    | `/api/goods-issues` | Issue goods and decrease stock quantity |
 
 ---
 
@@ -169,6 +188,35 @@ Stock quantity is not updated directly through the stock API. Quantity changes w
 
 ---
 
+### Goods receipt
+
+```json
+{
+  "stockId": "STOCK_ID",
+  "quantity": 10,
+  "reference": "PO-1002",
+  "reason": "Supplier delivery"
+}
+```
+---
+
+## Goods Issue
+
+```markdown
+### Goods issue
+
+```json
+{
+  "stockId": "STOCK_ID",
+  "quantity": 3,
+  "reference": "SO-1001",
+  "reason": "Customer order"
+}
+```
+
+---
+
+
 ## Project Structure
 
 ```text
@@ -181,19 +229,26 @@ inventory-management-api
 │   ├── controllers
 │   │   ├── productController.js
 │   │   ├── warehouseController.js
-│   │   └── stockController.js
+│   │   ├── stockController.js
+│   │   ├── stockMovementController.js
+│   │   ├── goodsReceiptController.js
+│   │   └── goodsIssueController.js
 │   │
 │   ├── middleware
 │   │
 │   ├── models
 │   │   ├── Product.js
 │   │   ├── Warehouse.js
-│   │   └── Stock.js
+│   │   ├── Stock.js
+│   │   └── StockMovement.js
 │   │
 │   ├── routes
 │   │   ├── productRoutes.js
 │   │   ├── warehouseRoutes.js
-│   │   └── stockRoutes.js
+│   │   ├── stockRoutes.js
+│   │   ├── stockMovementRoutes.js
+│   │   ├── goodsReceiptRoutes.js
+│   │   └── goodsIssueRoutes.js
 │   │
 │   ├── services
 │   │
@@ -286,18 +341,21 @@ Implemented:
 * MongoDB integration
 * Environment-based configuration
 * Business rules for product, warehouse and stock lifecycle
-
-Current focus:
-
 * Stock movement domain
 * Goods receipt workflows
 * Goods issue workflow
 
+Current focus:
+
+* Swagger / OpenAPI documentation
+* MongoDB transactions
+* Docker support
+
 Planned later:
 
-* Swagger API documentation
-* Docker setup
-* Code quality improvements
+* Automated tests
+* GitHub Actions CI
+
 
 ---
 
@@ -347,6 +405,14 @@ Current stock rules:
 * Future quantity changes must be handled through stock movement workflows.
 * Stock records are created only once for each product and warehouse combination and represent the current inventory state.
 
+Current inventory rules:
+
+* Stock quantity is never updated directly.
+* Every inventory change is executed through a business process.
+* Goods receipt creates a stock movement and increases the current stock quantity.
+* Goods issue creates a stock movement and decreases the current stock quantity.
+* Goods issue is rejected when available quantity is insufficient.
+
 Supported product units:
 
 ```text
@@ -372,13 +438,27 @@ The planned stock model will connect products and warehouses.
 A stock record will represent the quantity of one product in one warehouse.
 
 ```text
-Product
-   │
-   ▼
- Stock
-   ▲
-   │
-Warehouse
+                Product
+                    │
+                    ▼
+              +-----------+
+              |   Stock   |
+              +-----------+
+                    ▲
+                    │
+                Warehouse
+
+                    │
+                    ▼
+
+          +------------------+
+          | Stock Movement   |
+          +------------------+
+                    ▲
+                    │
+     ┌──────────────┴──────────────┐
+     │                             │
+Goods Receipt              Goods Issue
 ```
 
 Stock movements will document why and how stock quantities changed.
@@ -387,17 +467,22 @@ Stock movements will document why and how stock quantities changed.
 
 ## Roadmap
 
-Planned development order:
+Completed:
 
 1. Product management
 2. Warehouse management
-3. Stock model
-4. Stock movement model
+3. Stock management
+4. Stock movement tracking
 5. Goods receipt process
 6. Goods issue process
-7. Stock movement history
-8. Swagger documentation
-9. Docker setup
+
+Next milestones:
+
+7. Swagger / OpenAPI documentation
+8. MongoDB transactions
+9. Docker support
+10. Automated tests
+
 
 ---
 
@@ -415,6 +500,16 @@ This project demonstrates backend skills that are relevant for roles such as:
 
 The project is focused on practical backend logic instead of frontend design.
 It shows how backend APIs can model real business rules, not only simple CRUD operations.
+
+---
+
+## Design Philosophy
+
+The project follows a business-first approach.
+
+Instead of updating inventory quantities directly, every inventory change is executed through a business process and recorded as a stock movement.
+
+This design keeps the current inventory state and its complete history separated while maintaining a clear and maintainable backend architecture.
 
 ---
 
