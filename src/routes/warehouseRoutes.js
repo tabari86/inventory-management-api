@@ -1,4 +1,9 @@
 const express = require("express");
+const {
+  createWarehouseValidation,
+} = require("../validators/warehouseValidator");
+
+const validateRequest = require("../middleware/validateRequest");
 
 const {
   createWarehouse,
@@ -14,7 +19,12 @@ router.get("/", getWarehouses);
 
 router.get("/:id", getWarehouseById);
 
-router.post("/", createWarehouse);
+router.post(
+  "/",
+  createWarehouseValidation,
+  validateRequest,
+  createWarehouse
+);
 
 router.patch("/:id", updateWarehouse);
 

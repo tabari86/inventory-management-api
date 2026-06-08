@@ -6,12 +6,23 @@ const {
   getStockById,
 } = require("../controllers/stockController");
 
+const {
+  createStockValidation,
+} = require("../validators/stockValidator");
+
+const validateRequest = require("../middleware/validateRequest");
+
 const router = express.Router();
 
 router.get("/", getStocks);
 
 router.get("/:id", getStockById);
 
-router.post("/", createStock);
+router.post(
+  "/",
+  createStockValidation,
+  validateRequest,
+  createStock
+);
 
 module.exports = router;

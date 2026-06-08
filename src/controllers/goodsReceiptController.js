@@ -2,7 +2,7 @@ const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
 const mongoose = require("mongoose");
 
-const createGoodsReceipt = async (req, res) => {
+const createGoodsReceipt = async (req, res, next) => {
   try {
     const { stockId, quantity, reference, reason } = req.body;
 
@@ -46,9 +46,8 @@ const createGoodsReceipt = async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not complete goods receipt",
-    });
+    error.message = "Could not complete goods receipt";
+    next(error);
   }
 };
 

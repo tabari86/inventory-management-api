@@ -1,7 +1,7 @@
 const Product = require("../models/Product");
 const mongoose = require("mongoose");
 
-const createProduct = async (req, res) => {
+const createProduct = async (req, res, next) => {
   try {
     const { sku, name, description, unit, status } = req.body;
 
@@ -32,13 +32,12 @@ const createProduct = async (req, res) => {
       data: product,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not create product",
-    });
+    error.message = "Could not create product";
+    next(error);
   }
 };
 
-const getProducts = async (req, res) => {
+const getProducts = async (req, res, next) => {
   try {
     const products = await Product.find().sort({ createdAt: -1 });
 
@@ -47,13 +46,12 @@ const getProducts = async (req, res) => {
       data: products,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve products",
-    });
+    error.message = "Could not retrieve products";
+    next(error);
   }
 };
 
-const getProductById = async (req, res) => {
+const getProductById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -76,13 +74,12 @@ const getProductById = async (req, res) => {
       data: product,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve product",
-    });
+    error.message = "Could not retrieve product";
+    next(error);
   }
 };
 
-const updateProduct = async (req, res) => {
+const updateProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { sku, name, description, unit, status } = req.body;
@@ -125,13 +122,12 @@ const updateProduct = async (req, res) => {
       data: updatedProduct,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not update product",
-    });
+    error.message = "Could not update product";
+    next(error);
   }
 };
 
-const deactivateProduct = async (req, res) => {
+const deactivateProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -158,13 +154,12 @@ const deactivateProduct = async (req, res) => {
       data: updatedProduct,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not deactivate product",
-    });
+    error.message = "Could not deactivate product";
+    next(error);
   }
 };
 
-const deleteProduct = async (req, res) => {
+const deleteProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -194,9 +189,8 @@ const deleteProduct = async (req, res) => {
       message: "Product deleted successfully",
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not delete product",
-    });
+    error.message = "Could not delete product";
+    next(error);
   }
 };
 

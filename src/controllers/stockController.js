@@ -4,7 +4,7 @@ const Product = require("../models/Product");
 const Warehouse = require("../models/Warehouse");
 const Stock = require("../models/Stock");
 
-const createStock = async (req, res) => {
+const createStock = async (req, res, next) => {
   try {
     const { productId, warehouseId } = req.body;
 
@@ -67,13 +67,12 @@ const createStock = async (req, res) => {
       data: stock,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not create stock record",
-    });
+    error.message = "Could not create stock record";
+    next(error);
   }
 };
 
-const getStocks = async (req, res) => {
+const getStocks = async (req, res, next) => {
   try {
     const stocks = await Stock.find()
       .populate("productId", "sku name unit status")
@@ -85,13 +84,12 @@ const getStocks = async (req, res) => {
       data: stocks,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve stock records",
-    });
+    error.message = "Could not retrieve stock records";
+    next(error);
   }
 };
 
-const getStockById = async (req, res) => {
+const getStockById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -116,9 +114,8 @@ const getStockById = async (req, res) => {
       data: stock,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve stock record",
-    });
+    error.message = "Could not retrieve stock record";
+    next(error);
   }
 };
 

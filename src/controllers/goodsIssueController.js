@@ -2,7 +2,7 @@ const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
 const mongoose = require("mongoose");
 
-const createGoodsIssue = async (req, res) => {
+const createGoodsIssue = async (req, res, next) => {
   try {
     const { stockId, quantity, reference, reason } = req.body;
 
@@ -52,9 +52,8 @@ const createGoodsIssue = async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not complete goods issue",
-    });
+    error.message = "Could not complete goods issue";
+    next(error);
   }
 };
 

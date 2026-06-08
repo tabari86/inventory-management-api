@@ -1,7 +1,7 @@
 const Warehouse = require("../models/Warehouse");
 const mongoose = require("mongoose");
 
-const createWarehouse = async (req, res) => {
+const createWarehouse = async (req, res, next) => {
   try {
     const { code, name, description, status } = req.body;
 
@@ -31,13 +31,12 @@ const createWarehouse = async (req, res) => {
       data: warehouse,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not create warehouse",
-    });
+    error.message = "Could not create warehouse";
+    next(error);
   }
 };
 
-const getWarehouses = async (req, res) => {
+const getWarehouses = async (req, res, next) => {
   try {
     const warehouses = await Warehouse.find().sort({ createdAt: -1 });
 
@@ -46,13 +45,12 @@ const getWarehouses = async (req, res) => {
       data: warehouses,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve warehouses",
-    });
+    error.message = "Could not retrieve warehouses";
+    next(error);
   }
 };
 
-const getWarehouseById = async (req, res) => {
+const getWarehouseById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -75,13 +73,12 @@ const getWarehouseById = async (req, res) => {
       data: warehouse,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve warehouse",
-    });
+    error.message = "Could not retrieve warehouse";
+    next(error);
   }
 };
 
-const updateWarehouse = async (req, res) => {
+const updateWarehouse = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, description, status } = req.body;
@@ -111,13 +108,12 @@ const updateWarehouse = async (req, res) => {
       data: updatedWarehouse,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not update warehouse",
-    });
+    error.message = "Could not update warehouse";
+    next(error);
   }
 };
 
-const deactivateWarehouse = async (req, res) => {
+const deactivateWarehouse = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -144,9 +140,8 @@ const deactivateWarehouse = async (req, res) => {
       data: updatedWarehouse,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not deactivate warehouse",
-    });
+        error.message = "Could not deactivate warehouse";
+    next(error);
   }
 };
 

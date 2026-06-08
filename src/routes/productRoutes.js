@@ -1,4 +1,9 @@
 const express = require("express");
+const {
+  createProductValidation,
+} = require("../validators/productValidator");
+
+const validateRequest = require("../middleware/validateRequest");
 
 const {
   createProduct,
@@ -15,7 +20,12 @@ router.get("/", getProducts);
 
 router.get("/:id", getProductById);
 
-router.post("/", createProduct);
+router.post(
+  "/",
+  createProductValidation,
+  validateRequest,
+  createProduct
+);
 
 router.patch("/:id", updateProduct);
 

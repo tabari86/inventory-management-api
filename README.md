@@ -47,7 +47,9 @@ Current features:
 * Duplicate stock prevention
 
 * Stock quantity management through business processes
-* Basic API error handling
+* Request validation using express-validator
+* Global error handling middleware
+* Layered backend architecture
 
 Planned features:
 
@@ -202,9 +204,6 @@ Stock quantity is not updated directly through the stock API. Quantity changes w
 
 ## Goods Issue
 
-```markdown
-### Goods issue
-
 ```json
 {
   "stockId": "STOCK_ID",
@@ -235,6 +234,8 @@ inventory-management-api
 │   │   └── goodsIssueController.js
 │   │
 │   ├── middleware
+│   │   ├── validateRequest.js
+│   │   └── errorHandler.js
 │   │
 │   ├── models
 │   │   ├── Product.js
@@ -252,6 +253,13 @@ inventory-management-api
 │   │
 │   ├── services
 │   │
+│   ├── validators
+│   │   ├── productValidator.js
+│   │   ├── warehouseValidator.js
+│   │   ├── stockValidator.js
+│   │   ├── goodsReceiptValidator.js
+│   │   └── goodsIssueValidator.js
+│   │
 │   └── server.js
 │
 ├── .env
@@ -267,13 +275,27 @@ inventory-management-api
 The project follows a simple layered backend structure.
 
 ```text
+Client
+   │
+   ▼
 Routes
-  ↓
+   │
+   ▼
+Validation
+   │
+   ▼
 Controllers
-  ↓
+   │
+   ▼
 Models
-  ↓
-Database
+   │
+   ▼
+MongoDB
+
+Errors
+   │
+   ▼
+Global Error Handler
 ```
 
 ### Routes
@@ -347,12 +369,18 @@ Implemented:
 
 Current focus:
 
-* Swagger / OpenAPI documentation
-* MongoDB transactions
-* Docker support
+* JWT Authentication
+* Refresh Token workflow
+* Role Based Access Control (RBAC)
+* Protected API routes
 
-Planned later:
+Planned features:
 
+* JWT Authentication
+* Refresh Token support
+* Role Based Access Control (RBAC)
+* Swagger / OpenAPI
+* Docker
 * Automated tests
 * GitHub Actions CI
 
@@ -467,21 +495,27 @@ Stock movements will document why and how stock quantities changed.
 
 ## Roadmap
 
-Completed:
+Completed
 
 1. Product management
 2. Warehouse management
 3. Stock management
 4. Stock movement tracking
-5. Goods receipt process
-6. Goods issue process
+5. Goods receipt workflow
+6. Goods issue workflow
+7. Validation layer
+8. Global error handling
 
-Next milestones:
+Next milestones
 
-7. Swagger / OpenAPI documentation
-8. MongoDB transactions
-9. Docker support
-10. Automated tests
+9. JWT Authentication
+10. Refresh Token
+11. Role Based Access Control (RBAC)
+12. Swagger / OpenAPI
+13. Docker
+14. Automated Tests
+15. GitHub Actions CI
+16. Deployment
 
 
 ---

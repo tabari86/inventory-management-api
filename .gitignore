@@ -1,4 +1,8 @@
 .env
 node_modules/
 dist/
-*logs    
+
+# Postman local files
+.postman/
+postman/globals/
+*logs

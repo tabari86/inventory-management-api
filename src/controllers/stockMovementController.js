@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
 
-const createStockMovement = async (req, res) => {
+const createStockMovement = async (req, res, next) => {
   try {
     const { stockId, type, quantity, reference, reason } = req.body;
 
@@ -46,15 +46,12 @@ const createStockMovement = async (req, res) => {
       data: stockMovement,
     });
   } catch (error) {
-
-    return res.status(500).json({
-      message: "Could not create stock movement",
-      
-    });
+    error.message = "Could not create stock movement";
+    next(error);
   }
 };
 
-const getStockMovements = async (req, res) => {
+const getStockMovements = async (req, res, next) => {
   try {
     const stockMovements = await StockMovement.find()
       .populate({
@@ -77,13 +74,12 @@ const getStockMovements = async (req, res) => {
       data: stockMovements,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve stock movements",
-    });
+    error.message = "Could not retrieve stock movements";
+    next(error);
   }
 };
 
-const getStockMovementById = async (req, res) => {
+const getStockMovementById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -118,9 +114,8 @@ const getStockMovementById = async (req, res) => {
       data: stockMovement,
     });
   } catch (error) {
-    return res.status(500).json({
-      message: "Could not retrieve stock movement",
-    });
+    error.message = "Could not retrieve stock movement";
+    next(error);
   }
 };
 

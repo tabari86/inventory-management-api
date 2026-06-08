@@ -2,6 +2,7 @@ const express = require("express");
 require("dotenv").config();
 
 const connectDatabase = require("./config/database");
+const errorHandler = require("./middleware/errorHandler");
 const productRoutes = require("./routes/productRoutes");
 const warehouseRoutes = require("./routes/warehouseRoutes");
 const stockRoutes = require("./routes/stockRoutes");
@@ -26,6 +27,7 @@ app.use("/api/stocks", stockRoutes);
 app.use("/api/stock-movements", stockMovementRoutes);
 app.use("/api/goods-receipts", goodsReceiptRoutes);
 app.use("/api/goods-issues", goodsIssueRoutes);
+app.use(errorHandler);
 
 connectDatabase();
 
