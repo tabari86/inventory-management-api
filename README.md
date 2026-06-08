@@ -23,6 +23,8 @@ Inventory changes are handled through business processes that create immutable s
 * Mongoose
 * dotenv
 * Nodemon
+* bcrypt
+* jsonwebtoken
 
 ---
 
@@ -51,10 +53,22 @@ Current features:
 * Global error handling middleware
 * Layered backend architecture
 
+* User registration and login
+* Password hashing using bcrypt
+* JWT access token authentication
+* Refresh token workflow
+* Refresh token hashing and rotation
+* Logout with refresh token revocation
+* Protected routes using authentication middleware
+* Role Based Access Control (RBAC)
+
 Planned features:
 
-* Swagger API documentation
-* Docker setup
+* Swagger / OpenAPI
+* Docker
+* Automated tests
+* GitHub Actions CI
+* Deployment
 
 ---
 
@@ -105,8 +119,22 @@ Stock quantity is not updated directly through the stock API. Quantity changes w
 ### Goods Issue
 
 | Method  | Endpoint            | Description                             |
-|---------| --------------------|-----------------------------------------|
+|---------|---------------------|-----------------------------------------|
 | POST    | `/api/goods-issues` | Issue goods and decrease stock quantity |
+
+
+### Authentication
+
+| Method | Endpoint             | Description                              |
+|--------|----------------------|------------------------------------------|
+| POST   | `/api/auth/register` | Register a new user                      |
+| POST   | `/api/auth/login`    | Login and receive access/refresh tokens  |
+| POST   | `/api/auth/refresh`  | Refresh access token using refresh token |
+| POST   | `/api/auth/logout`   | Logout and revoke refresh token          |
+| GET    | `/api/auth/me`       | Retrieve the currently authenticated user|
+
+
+
 
 ---
 
@@ -213,6 +241,43 @@ Stock quantity is not updated directly through the stock API. Quantity changes w
 }
 ```
 
+
+### Register user
+
+```json
+{
+  "name": "Admin User",
+  "email": "admin@example.com",
+  "password": "Password123",
+  "role": "admin"
+}
+```
+
+### Login user
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "Password123"
+}
+```
+
+### Refresh access token
+
+```json
+{
+  "refreshToken": "REFRESH_TOKEN"
+}
+```
+
+### Logout
+
+```json
+{
+  "refreshToken": "REFRESH_TOKEN"
+}
+```
+
 ---
 
 
@@ -226,6 +291,7 @@ inventory-management-api
 │   │   └── database.js
 │   │
 │   ├── controllers
+│   │   ├── authController.js
 │   │   ├── productController.js
 │   │   ├── warehouseController.js
 │   │   ├── stockController.js
@@ -235,15 +301,20 @@ inventory-management-api
 │   │
 │   ├── middleware
 │   │   ├── validateRequest.js
-│   │   └── errorHandler.js
+│   │   ├── errorHandler.js
+│   │   ├── authMiddleware.js
+│   │   └── roleMiddleware.js
 │   │
 │   ├── models
 │   │   ├── Product.js
 │   │   ├── Warehouse.js
 │   │   ├── Stock.js
-│   │   └── StockMovement.js
+│   │   ├── StockMovement.js
+│   │   ├── User.js
+│   │   └── RefreshToken.js
 │   │
 │   ├── routes
+│   │   ├── authRoutes.js
 │   │   ├── productRoutes.js
 │   │   ├── warehouseRoutes.js
 │   │   ├── stockRoutes.js
@@ -258,7 +329,8 @@ inventory-management-api
 │   │   ├── warehouseValidator.js
 │   │   ├── stockValidator.js
 │   │   ├── goodsReceiptValidator.js
-│   │   └── goodsIssueValidator.js
+│   │   ├── goodsIssueValidator.js
+│   │   └── userValidator.js
 │   │
 │   └── server.js
 │
@@ -298,6 +370,11 @@ Errors
 Global Error Handler
 ```
 
+Authentication is handled through JWT access tokens and refresh tokens.
+Access tokens are used to protect private routes.
+Refresh tokens are stored as hashes in the database and can be revoked during logout or token rotation.
+
+
 ### Routes
 
 Routes define the API endpoints and forward requests to the correct controller.
@@ -325,6 +402,8 @@ Create a `.env` file in the project root:
 ```env
 PORT=3000
 MONGODB_URI=mongodb://localhost:27017/inventory_management
+JWT_ACCESS_SECRET=your_access_token_secret
+JWT_ACCESS_EXPIRES_IN=15m
 ```
 
 The `.env` file is ignored by Git and should not be committed.
@@ -366,23 +445,27 @@ Implemented:
 * Stock movement domain
 * Goods receipt workflows
 * Goods issue workflow
+* Authentication API
+* JWT access token authentication
+* Refresh token rotation
+* Refresh token revocation
+* Auth middleware
+* Role Based Access Control (RBAC)
+* Protected goods receipt and goods issue routes
 
 Current focus:
 
-* JWT Authentication
-* Refresh Token workflow
-* Role Based Access Control (RBAC)
-* Protected API routes
+* Swagger / OpenAPI documentation
+* Docker support
+* Automated tests
 
 Planned features:
 
-* JWT Authentication
-* Refresh Token support
-* Role Based Access Control (RBAC)
 * Swagger / OpenAPI
 * Docker
 * Automated tests
 * GitHub Actions CI
+* Deployment
 
 
 ---
@@ -440,6 +523,18 @@ Current inventory rules:
 * Goods receipt creates a stock movement and increases the current stock quantity.
 * Goods issue creates a stock movement and decreases the current stock quantity.
 * Goods issue is rejected when available quantity is insufficient.
+
+Current authentication rules:
+
+* Passwords are hashed before being stored.
+* Login returns an access token and a refresh token.
+* Access tokens are used for protected routes.
+* Refresh tokens are stored as hashes in the database.
+* Refresh tokens can be revoked.
+* Refresh token rotation is used when refreshing access tokens.
+* Logout revokes the current refresh token.
+* Goods receipt and goods issue require authentication.
+* Goods receipt and goods issue are limited to `admin` and `manager` roles.
 
 Supported product units:
 
@@ -505,17 +600,18 @@ Completed
 6. Goods issue workflow
 7. Validation layer
 8. Global error handling
+9. JWT Authentication
+10. Refresh Token workflow
+11. Role Based Access Control (RBAC)
+12. Protected business routes
 
 Next milestones
 
-9. JWT Authentication
-10. Refresh Token
-11. Role Based Access Control (RBAC)
-12. Swagger / OpenAPI
-13. Docker
-14. Automated Tests
-15. GitHub Actions CI
-16. Deployment
+13. Swagger / OpenAPI
+14. Docker
+15. Automated Tests
+16. GitHub Actions CI
+17. Deployment
 
 
 ---

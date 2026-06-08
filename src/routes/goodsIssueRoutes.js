@@ -10,10 +10,20 @@ const {
 
 const validateRequest = require("../middleware/validateRequest");
 
+const {
+  authenticateUser,
+} = require("../middleware/authMiddleware");
+
+const {
+  authorizeRoles,
+} = require("../middleware/roleMiddleware");
+
 const router = express.Router();
 
 router.post(
   "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
   createGoodsIssueValidation,
   validateRequest,
   createGoodsIssue

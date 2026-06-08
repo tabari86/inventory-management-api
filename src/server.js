@@ -9,6 +9,7 @@ const stockRoutes = require("./routes/stockRoutes");
 const stockMovementRoutes = require("./routes/stockMovementRoutes");
 const goodsReceiptRoutes = require("./routes/goodsReceiptRoutes");
 const goodsIssueRoutes = require("./routes/goodsIssueRoutes");
+const authRoutes = require("./routes/authRoutes");
 const app = express();
 
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,7 @@ app.get("/", (req, res) => {
   });
 });
 
+app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/warehouses", warehouseRoutes);
 app.use("/api/stocks", stockRoutes);
