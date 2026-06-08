@@ -6,6 +6,7 @@
 ![JWT](https://img.shields.io/badge/Auth-JWT-orange)
 ![RBAC](https://img.shields.io/badge/Authorization-RBAC-purple)
 ![Swagger](https://img.shields.io/badge/API%20Docs-Swagger-brightgreen)
+![Docker](https://img.shields.io/badge/Container-Docker-blue)
 ![Status](https://img.shields.io/badge/Status-In%20Development-blue)
 
 A backend API for managing products, warehouses and stock movements in a simple inventory management system.
@@ -30,6 +31,8 @@ Inventory changes are handled through business processes that create immutable s
 * jsonwebtoken
 * swagger-jsdoc
 * swagger-ui-express
+* Docker
+* Docker Compose
 
 ---
 
@@ -70,10 +73,12 @@ Current features:
 * Swagger / OpenAPI documentation
 * Interactive API documentation at `/api-docs`
 
+* Docker support
+* Docker Compose setup with MongoDB container
+
+
 Planned features:
 
-* Docker
-* Automated tests
 * GitHub Actions CI
 * Deployment
 
@@ -342,6 +347,9 @@ inventory-management-api
 │   └── server.js
 │
 ├── .env
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
 ├── .gitignore
 ├── package.json
 └── README.md
@@ -415,6 +423,7 @@ JWT_ACCESS_EXPIRES_IN=15m
 
 The `.env` file is ignored by Git and should not be committed.
 
+When using Docker Compose, the required environment variables are provided inside `docker-compose.yml` for local development.
 ---
 
 ## Getting Started
@@ -436,6 +445,34 @@ The server should start on:
 ```text
 http://localhost:3000
 ```
+
+
+### Run with Docker
+
+Build and start the API together with MongoDB:
+
+```bash
+docker compose up --build
+```
+
+The API will be available at:
+
+```text
+http://localhost:3000
+```
+
+Swagger documentation will be available at:
+
+```text
+http://localhost:3000/api-docs
+```
+
+Stop the containers:
+
+```bash
+docker compose down
+```
+
 
 ---
 
@@ -460,16 +497,15 @@ Implemented:
 * Role Based Access Control (RBAC)
 * Protected goods receipt and goods issue routes
 * Swagger / OpenAPI documentation
+* Dockerfile for API container
+* Docker Compose setup for API and MongoDB
 
 Current focus:
 
-* Docker support
 * Automated tests
 
 Planned features:
 
-* Swagger / OpenAPI documentation
-* Docker
 * Automated tests
 * GitHub Actions CI
 * Deployment
@@ -619,11 +655,11 @@ Completed
 10. Refresh Token workflow
 11. Role Based Access Control (RBAC)
 12. Protected business routes
-13. Swagger / OpenAPI
+13. Swagger / OpenAPI documentation
+14. Docker support
 
 Next milestones
 
-14. Docker
 15. Automated Tests
 16. GitHub Actions CI
 17. Deployment
