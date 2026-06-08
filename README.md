@@ -7,6 +7,8 @@
 ![RBAC](https://img.shields.io/badge/Authorization-RBAC-purple)
 ![Swagger](https://img.shields.io/badge/API%20Docs-Swagger-brightgreen)
 ![Docker](https://img.shields.io/badge/Container-Docker-blue)
+![Tests](https://img.shields.io/badge/Tests-Jest%20%2B%20Supertest-green)
+![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue)
 ![Status](https://img.shields.io/badge/Status-In%20Development-blue)
 
 A backend API for managing products, warehouses and stock movements in a simple inventory management system.
@@ -33,6 +35,10 @@ Inventory changes are handled through business processes that create immutable s
 * swagger-ui-express
 * Docker
 * Docker Compose
+* Jest
+* Supertest
+* mongodb-memory-server
+* GitHub Actions
 
 ---
 
@@ -76,10 +82,14 @@ Current features:
 * Docker support
 * Docker Compose setup with MongoDB container
 
+* Automated API tests
+* Integration tests using Jest and Supertest
+* Isolated test database using mongodb-memory-server
+* GitHub Actions CI workflow
+
 
 Planned features:
 
-* GitHub Actions CI
 * Deployment
 
 ---
@@ -117,8 +127,15 @@ Warehouse deletion is intentionally not implemented because warehouses may later
 | GET    | `/api/stocks`     | Retrieve all stock records                        |
 | GET    | `/api/stocks/:id` | Retrieve a single stock record                    |
 
-
 Stock quantity is not updated directly through the stock API. Quantity changes will later be handled through stock movement workflows.
+
+### Stock Movements
+
+| Method | Endpoint                   | Description                      |
+|--------|----------------------------|----------------------------------|
+| POST   | `/api/stock-movements`     | Create a stock movement record   |
+| GET    | `/api/stock-movements`     | Retrieve all stock movements     |
+| GET    | `/api/stock-movements/:id` | Retrieve a single stock movement |
 
 
 ### Goods Receipt
@@ -298,9 +315,14 @@ Stock quantity is not updated directly through the stock API. Quantity changes w
 ```text
 inventory-management-api
 │
+├── .github
+│   └── workflows
+│       └── ci.yml
+│
 ├── src
 │   ├── config
-│   │   └── database.js
+│   │   ├── database.js
+│   │   └── swagger.js
 │   │
 │   ├── controllers
 │   │   ├── authController.js
@@ -334,8 +356,6 @@ inventory-management-api
 │   │   ├── goodsReceiptRoutes.js
 │   │   └── goodsIssueRoutes.js
 │   │
-│   ├── services
-│   │
 │   ├── validators
 │   │   ├── productValidator.js
 │   │   ├── warehouseValidator.js
@@ -344,14 +364,28 @@ inventory-management-api
 │   │   ├── goodsIssueValidator.js
 │   │   └── userValidator.js
 │   │
+│   ├── app.js
 │   └── server.js
 │
+├── tests
+│   ├── app.test.js
+│   ├── auth.test.js
+│   ├── product.test.js
+│   ├── warehouse.test.js
+│   ├── stock.test.js
+│   ├── inventoryWorkflow.test.js
+│   └── setupTestDb.js
+│
+├── docs
+│   └── Swagger-UI.png
+│
 ├── .env
-├── Dockerfile
-├── docker-compose.yml
 ├── .dockerignore
 ├── .gitignore
+├── Dockerfile
+├── docker-compose.yml
 ├── package.json
+├── package-lock.json
 └── README.md
 ```
 
@@ -389,6 +423,9 @@ Authentication is handled through JWT access tokens and refresh tokens.
 Access tokens are used to protect private routes.
 Refresh tokens are stored as hashes in the database and can be revoked during logout or token rotation.
 
+For automated testing, the Express application is separated from the server startup logic.  
+`src/app.js` exports the Express app for tests, while `src/server.js` connects to the database and starts the HTTP server.
+
 
 ### Routes
 
@@ -424,6 +461,8 @@ JWT_ACCESS_EXPIRES_IN=15m
 The `.env` file is ignored by Git and should not be committed.
 
 When using Docker Compose, the required environment variables are provided inside `docker-compose.yml` for local development.
+
+
 ---
 
 ## Getting Started
@@ -474,6 +513,29 @@ docker compose down
 ```
 
 
+### Run Tests
+
+Run the automated test suite:
+
+```bash
+npm test
+```
+
+The test suite uses Jest, Supertest and mongodb-memory-server.
+
+The tests cover:
+
+* Root API endpoint
+* Authentication workflows
+* Refresh token rotation
+* Logout token revocation
+* Product API
+* Warehouse API
+* Stock API
+* Goods receipt workflow
+* Goods issue workflow
+* RBAC protected routes
+
 ---
 
 ## Current Status
@@ -499,15 +561,16 @@ Implemented:
 * Swagger / OpenAPI documentation
 * Dockerfile for API container
 * Docker Compose setup for API and MongoDB
+* Automated API tests
+* Integration tests with isolated test database
+* GitHub Actions CI workflow
 
 Current focus:
 
-* Automated tests
+* Deployment preparation
 
 Planned features:
 
-* Automated tests
-* GitHub Actions CI
 * Deployment
 
 
@@ -520,6 +583,10 @@ Interactive API documentation is available through Swagger UI.
 ```text
 http://localhost:3000/api-docs
 ```
+
+### Swagger UI Preview
+
+![Swagger UI Preview](docs/Swagger-UI.png)
 
 The Swagger documentation includes:
 
@@ -564,7 +631,7 @@ Current stock rules:
 * A stock record can only be created for an active warehouse.
 * Stock quantity starts at `0`.
 * Stock quantity is not changed directly through the stock API.
-* Future quantity changes must be handled through stock movement workflows.
+* Quantity changes are handled through stock movement workflows..
 * Stock records are created only once for each product and warehouse combination and represent the current inventory state.
 
 Current inventory rules:
@@ -602,14 +669,14 @@ meter
 
 Stock quantity will not be changed directly.
 
-Future stock changes will be handled through business processes such as:
+Stock changes are handled through business processes such as:
 
 * Goods receipt
 * Goods issue
 * Stock movement history
 
-The planned stock model will connect products and warehouses.
-A stock record will represent the quantity of one product in one warehouse.
+The stock model connects products and warehouses.
+A stock record represents the quantity of one product in one warehouse.
 
 ```text
                 Product
@@ -657,11 +724,11 @@ Completed
 12. Protected business routes
 13. Swagger / OpenAPI documentation
 14. Docker support
+15. Automated API tests
+16. GitHub Actions CI
 
 Next milestones
 
-15. Automated Tests
-16. GitHub Actions CI
 17. Deployment
 
 
