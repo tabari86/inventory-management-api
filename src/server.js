@@ -1,6 +1,9 @@
 const express = require("express");
 require("dotenv").config();
 
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./config/swagger");
+
 const connectDatabase = require("./config/database");
 const errorHandler = require("./middleware/errorHandler");
 const productRoutes = require("./routes/productRoutes");
@@ -12,6 +15,7 @@ const goodsIssueRoutes = require("./routes/goodsIssueRoutes");
 const authRoutes = require("./routes/authRoutes");
 const app = express();
 
+
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
@@ -21,6 +25,8 @@ app.get("/", (req, res) => {
     message: "Inventory Management API is running",
   });
 });
+
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/products", productRoutes);

@@ -3,6 +3,9 @@
 ![Node.js](https://img.shields.io/badge/Node.js-Backend-green)
 ![Express](https://img.shields.io/badge/Express.js-API-lightgrey)
 ![MongoDB](https://img.shields.io/badge/MongoDB-Database-brightgreen)
+![JWT](https://img.shields.io/badge/Auth-JWT-orange)
+![RBAC](https://img.shields.io/badge/Authorization-RBAC-purple)
+![Swagger](https://img.shields.io/badge/API%20Docs-Swagger-brightgreen)
 ![Status](https://img.shields.io/badge/Status-In%20Development-blue)
 
 A backend API for managing products, warehouses and stock movements in a simple inventory management system.
@@ -25,6 +28,8 @@ Inventory changes are handled through business processes that create immutable s
 * Nodemon
 * bcrypt
 * jsonwebtoken
+* swagger-jsdoc
+* swagger-ui-express
 
 ---
 
@@ -62,9 +67,11 @@ Current features:
 * Protected routes using authentication middleware
 * Role Based Access Control (RBAC)
 
+* Swagger / OpenAPI documentation
+* Interactive API documentation at `/api-docs`
+
 Planned features:
 
-* Swagger / OpenAPI
 * Docker
 * Automated tests
 * GitHub Actions CI
@@ -452,16 +459,16 @@ Implemented:
 * Auth middleware
 * Role Based Access Control (RBAC)
 * Protected goods receipt and goods issue routes
+* Swagger / OpenAPI documentation
 
 Current focus:
 
-* Swagger / OpenAPI documentation
 * Docker support
 * Automated tests
 
 Planned features:
 
-* Swagger / OpenAPI
+* Swagger / OpenAPI documentation
 * Docker
 * Automated tests
 * GitHub Actions CI
@@ -472,15 +479,23 @@ Planned features:
 
 ## Documentation
 
-API documentation will be added later using Swagger/OpenAPI after the core business features are stable.
+Interactive API documentation is available through Swagger UI.
 
-The documentation will describe:
+```text
+http://localhost:3000/api-docs
+```
 
-* Available endpoints
+The Swagger documentation includes:
+
+* Authentication endpoints
+* Product endpoints
+* Warehouse endpoints
+* Stock endpoints
+* Stock movement endpoints
+* Goods receipt and goods issue workflows
 * Request bodies
-* Response formats
-* Error responses
-* Business rules
+* Response descriptions
+* Protected routes using Bearer authentication
 
 ---
 
@@ -604,10 +619,10 @@ Completed
 10. Refresh Token workflow
 11. Role Based Access Control (RBAC)
 12. Protected business routes
+13. Swagger / OpenAPI
 
 Next milestones
 
-13. Swagger / OpenAPI
 14. Docker
 15. Automated Tests
 16. GitHub Actions CI
@@ -626,7 +641,7 @@ This project demonstrates backend skills that are relevant for roles such as:
 * Backend Developer
 * API Developer
 * Integration Developer
-* Junior Software Developer
+* Software Developer
 
 The project is focused on practical backend logic instead of frontend design.
 It shows how backend APIs can model real business rules, not only simple CRUD operations.
