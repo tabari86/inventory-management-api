@@ -9,7 +9,8 @@
 ![Docker](https://img.shields.io/badge/Container-Docker-blue)
 ![Tests](https://img.shields.io/badge/Tests-Jest%20%2B%20Supertest-green)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue)
-![Status](https://img.shields.io/badge/Status-In%20Development-blue)
+![Deployment](https://img.shields.io/badge/Deployment-Render-purple)
+![Status](https://img.shields.io/badge/Status-Production--Oriented-success)
 
 A backend API for managing products, warehouses and stock movements in a simple inventory management system.
 
@@ -20,6 +21,21 @@ The goal of this project is to model a realistic inventory and warehouse backend
 Inventory changes are handled through business processes that create immutable stock movement records while maintaining the current stock state.
 
 ---
+
+## Live Demo
+
+The API is deployed on Render and connected to MongoDB Atlas.
+
+```text
+https://inventory-management-api-6zuo.onrender.com
+
+```
+Swagger UI is available at:
+```text
+https://inventory-management-api-6zuo.onrender.com/api-docs
+
+```
+Note: The service runs on Render's free plan, so the first request after inactivity may take a few seconds.
 
 ## Tech Stack
 
@@ -39,6 +55,8 @@ Inventory changes are handled through business processes that create immutable s
 * Supertest
 * mongodb-memory-server
 * GitHub Actions
+* Render
+* MongoDB Atlas
 
 ---
 
@@ -87,10 +105,13 @@ Current features:
 * Isolated test database using mongodb-memory-server
 * GitHub Actions CI workflow
 
+* Deployment on Render
+* Production database using MongoDB Atlas
+
 
 Planned features:
 
-* Deployment
+* Further production improvements
 
 ---
 
@@ -127,7 +148,7 @@ Warehouse deletion is intentionally not implemented because warehouses may later
 | GET    | `/api/stocks`     | Retrieve all stock records                        |
 | GET    | `/api/stocks/:id` | Retrieve a single stock record                    |
 
-Stock quantity is not updated directly through the stock API. Quantity changes will later be handled through stock movement workflows.
+Stock quantity is not updated directly through the stock API. Quantity changes are handled through stock movement workflows.
 
 ### Stock Movements
 
@@ -564,14 +585,17 @@ Implemented:
 * Automated API tests
 * Integration tests with isolated test database
 * GitHub Actions CI workflow
+* Production deployment on Render
+* MongoDB Atlas production database connection
 
 Current focus:
 
-* Deployment preparation
+* Production hardening
 
 Planned features:
 
-* Deployment
+* Monitoring and logging improvements
+* Further security improvements
 
 
 ---
@@ -582,6 +606,12 @@ Interactive API documentation is available through Swagger UI.
 
 ```text
 http://localhost:3000/api-docs
+```
+
+Production Swagger UI:
+
+```text
+https://inventory-management-api-6zuo.onrender.com/api-docs
 ```
 
 ### Swagger UI Preview
@@ -631,7 +661,7 @@ Current stock rules:
 * A stock record can only be created for an active warehouse.
 * Stock quantity starts at `0`.
 * Stock quantity is not changed directly through the stock API.
-* Quantity changes are handled through stock movement workflows..
+* Quantity changes are handled through stock movement workflows.
 * Stock records are created only once for each product and warehouse combination and represent the current inventory state.
 
 Current inventory rules:
@@ -726,10 +756,13 @@ Completed
 14. Docker support
 15. Automated API tests
 16. GitHub Actions CI
+17. Deployment on Render
+18. MongoDB Atlas production database
 
 Next milestones
 
-17. Deployment
+19. Production hardening
+20. Monitoring and logging improvements
 
 
 ---
@@ -763,5 +796,5 @@ This design keeps the current inventory state and its complete history separated
 
 ## License
 
-This project is currently developed for portfolio purposes.
+This project is developed as a production-oriented backend API project for portfolio and professional demonstration purposes.
 
