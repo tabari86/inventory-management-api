@@ -400,7 +400,7 @@ inventory-management-api
 ├── docs
 │   └── Swagger-UI.png
 │
-├── .env
+├── .env.example
 ├── .dockerignore
 ├── .gitignore
 ├── Dockerfile
@@ -470,7 +470,13 @@ This structure keeps the project understandable and avoids unnecessary complexit
 
 ## Environment Variables
 
-Create a `.env` file in the project root:
+Use `.env.example` as a template for local configuration:
+
+```bash
+cp .env.example .env
+```
+
+Example values:
 
 ```env
 PORT=3000
@@ -481,7 +487,7 @@ JWT_ACCESS_EXPIRES_IN=15m
 
 The `.env` file is ignored by Git and should not be committed.
 
-When using Docker Compose, the required environment variables are provided inside `docker-compose.yml` for local development.
+When using Docker Compose, the required environment variables are provided inside `docker-compose.yml` for local container-based development.
 
 
 ---
@@ -515,10 +521,18 @@ Build and start the API together with MongoDB:
 docker compose up --build
 ```
 
+Docker Compose starts the API container, MongoDB, and basic health checks for both services.
+
 The API will be available at:
 
 ```text
 http://localhost:3000
+```
+
+Health check endpoint:
+
+```text
+http://localhost:3000/health
 ```
 
 Swagger documentation will be available at:

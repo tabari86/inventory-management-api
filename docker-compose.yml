@@ -5,12 +5,20 @@ services:
     ports:
       - "3000:3000"
     environment:
+      NODE_ENV: production
       PORT: 3000
       MONGODB_URI: mongodb://mongo:27017/inventory_management
       JWT_ACCESS_SECRET: docker_access_token_secret
       JWT_ACCESS_EXPIRES_IN: 15m
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:3000/health" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   mongo:
     image: mongo:8
@@ -19,6 +27,12 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: [ "CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   mongo_data:
