@@ -2,10 +2,12 @@ const express = require("express");
 
 const {
   createGoodsIssue,
+  createGoodsIssuesBulk,
 } = require("../controllers/goodsIssueController");
 
 const {
   createGoodsIssueValidation,
+  createBulkGoodsIssueValidation,
 } = require("../validators/goodsIssueValidator");
 
 const validateRequest = require("../middleware/validateRequest");
@@ -19,6 +21,15 @@ const {
 } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
+
+router.post(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  createBulkGoodsIssueValidation,
+  validateRequest,
+  createGoodsIssuesBulk
+);
 
 
 

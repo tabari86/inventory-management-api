@@ -1,10 +1,11 @@
 const express = require("express");
 
 const {
-  createStockMovement,
   getStockMovements,
   getStockMovementById,
 } = require("../controllers/stockMovementController");
+const { authenticateUser } = require("../middleware/authMiddleware");
+const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
@@ -22,7 +23,12 @@ const router = express.Router();
  *       500:
  *         description: Could not retrieve stock movements
  */
-router.get("/", getStockMovements);
+router.get(
+  "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getStockMovements
+);
 
 
 
@@ -50,59 +56,13 @@ router.get("/", getStockMovements);
  *       500:
  *         description: Could not retrieve stock movement
  */
-router.get("/:id", getStockMovementById);
+router.get(
+  "/:id",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getStockMovementById
+);
 
 
-
-/**
- * @swagger
- * /api/stock-movements:
- *   post:
- *     summary: Create a stock movement record
- *     tags:
- *       - Stock Movements
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - stockId
- *               - type
- *               - quantity
- *             properties:
- *               stockId:
- *                 type: string
- *                 example: 6a2419ba74ab9f90ef69cb15
- *               type:
- *                 type: string
- *                 enum:
- *                   - GOODS_RECEIPT
- *                   - GOODS_ISSUE
- *                   - ADJUSTMENT
- *                   - TRANSFER_IN
- *                   - TRANSFER_OUT
- *                 example: GOODS_RECEIPT
- *               quantity:
- *                 type: number
- *                 example: 10
- *               reference:
- *                 type: string
- *                 example: PO-1001
- *               reason:
- *                 type: string
- *                 example: Initial stock movement
- *     responses:
- *       201:
- *         description: Stock movement created successfully
- *       400:
- *         description: Invalid request or validation failed
- *       404:
- *         description: Stock record not found
- *       500:
- *         description: Could not create stock movement
- */
-router.post("/", createStockMovement);
 
 module.exports = router;

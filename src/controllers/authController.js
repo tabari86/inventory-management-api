@@ -5,43 +5,6 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const RefreshToken = require("../models/RefreshToken");
 
-const registerUser = async (req, res, next) => {
-  try {
-    const { name, email, password, role } = req.body;
-
-    const existingUser = await User.findOne({ email });
-
-    if (existingUser) {
-      return res.status(409).json({
-        message: "A user with this email already exists",
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      role,
-    });
-
-    return res.status(201).json({
-      message: "User registered successfully",
-      data: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        status: user.status,
-      },
-    });
-  } catch (error) {
-    error.message = "Could not register user";
-    next(error);
-  }
-};
-
 const loginUser = async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -75,7 +38,7 @@ const loginUser = async (req, res, next) => {
       },
       process.env.JWT_ACCESS_SECRET,
       {
-        expiresIn: "15m",
+        expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
       }
     );
 
@@ -242,7 +205,6 @@ const getCurrentUser = async (req, res, next) => {
 };
 
 module.exports = {
-  registerUser,
   loginUser,
   refreshAccessToken,
   logoutUser,

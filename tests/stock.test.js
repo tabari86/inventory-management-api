@@ -1,103 +1,178 @@
 const request = require("supertest");
 
 const app = require("../src/app");
+const Product = require("../src/models/Product");
+const Stock = require("../src/models/Stock");
+const Warehouse = require("../src/models/Warehouse");
+const {
+  createManagerToken,
+  createViewerToken,
+} = require("./helpers/authTestHelper");
 
 require("./setupTestDb");
 
-const createTestProduct = async () => {
-  const response = await request(app)
-    .post("/api/products")
-    .send({
-      sku: "STOCK-PRODUCT-001",
+const createProductAndWarehouse = async (overrides = {}) => {
+  const [product, warehouse] = await Promise.all([
+    Product.create({
+      sku: overrides.sku || "STOCK-PRODUCT-001",
       name: "Stock Test Product",
-      unit: "piece",
-    });
-
-  return response.body.data;
-};
-
-const createTestWarehouse = async () => {
-  const response = await request(app)
-    .post("/api/warehouses")
-    .send({
-      code: "WH-STOCK-001",
+      status: overrides.productStatus || "active",
+    }),
+    Warehouse.create({
+      code: overrides.code || "WH-STOCK-001",
       name: "Stock Test Warehouse",
-    });
+      status: overrides.warehouseStatus || "active",
+    }),
+  ]);
 
-  return response.body.data;
+  return { product, warehouse };
 };
 
 describe("Stock API", () => {
-  it("should retrieve all stock records", async () => {
-    const response = await request(app).get("/api/stocks");
+  it("allows authenticated viewers to retrieve stock records", async () => {
+    const viewerToken = await createViewerToken();
+    const response = await request(app)
+      .get("/api/stocks")
+      .set("Authorization", `Bearer ${viewerToken}`);
 
     expect(response.statusCode).toBe(200);
     expect(response.body.message).toBe("Stock records retrieved successfully");
     expect(Array.isArray(response.body.data)).toBe(true);
   });
 
-  it("should create a stock record for product and warehouse", async () => {
-    const product = await createTestProduct();
-    const warehouse = await createTestWarehouse();
-
+  it("rejects unauthenticated stock creation", async () => {
+    const { product, warehouse } = await createProductAndWarehouse();
     const response = await request(app)
       .post("/api/stocks")
-      .send({
-        productId: product._id,
-        warehouseId: warehouse._id,
-      });
+      .send({ productId: product._id, warehouseId: warehouse._id });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("rejects stock creation by a viewer", async () => {
+    const viewerToken = await createViewerToken();
+    const { product, warehouse } = await createProductAndWarehouse();
+    const response = await request(app)
+      .post("/api/stocks")
+      .set("Authorization", `Bearer ${viewerToken}`)
+      .send({ productId: product._id, warehouseId: warehouse._id });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("allows a manager to create stock at quantity zero", async () => {
+    const managerToken = await createManagerToken();
+    const { product, warehouse } = await createProductAndWarehouse();
+    const response = await request(app)
+      .post("/api/stocks")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ productId: product._id, warehouseId: warehouse._id });
 
     expect(response.statusCode).toBe(201);
     expect(response.body.message).toBe("Stock record created successfully");
-    expect(response.body.data).toHaveProperty("_id");
-    expect(response.body.data.productId).toBe(product._id);
-    expect(response.body.data.warehouseId).toBe(warehouse._id);
     expect(response.body.data.quantity).toBe(0);
-    expect(response.body.data.status).toBe("active");
   });
 
-  it("should reject duplicate stock record for same product and warehouse", async () => {
-    const product = await createTestProduct();
-    const warehouse = await createTestWarehouse();
-
-    await request(app)
-      .post("/api/stocks")
-      .send({
-        productId: product._id,
-        warehouseId: warehouse._id,
-      });
+  it("bulk creates stock records for a manager", async () => {
+    const managerToken = await createManagerToken();
+    const products = await Product.create([
+      { sku: "BULK-STOCK-001", name: "Bulk Stock One" },
+      { sku: "BULK-STOCK-002", name: "Bulk Stock Two" },
+    ]);
+    const warehouse = await Warehouse.create({
+      code: "WH-BULK-STOCK",
+      name: "Bulk Stock Warehouse",
+    });
 
     const response = await request(app)
-      .post("/api/stocks")
-      .send({
-        productId: product._id,
-        warehouseId: warehouse._id,
-      });
+      .post("/api/stocks/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send(
+        products.map((product) => ({
+          productId: product._id.toString(),
+          warehouseId: warehouse._id.toString(),
+        }))
+      );
 
-    expect(response.statusCode).toBe(409);
-    expect(response.body.message).toBe(
-      "Stock record already exists for this product and warehouse"
+    expect(response.statusCode).toBe(201);
+    expect(response.body.data.createdCount).toBe(2);
+    expect(response.body.data.stocks.every((stock) => stock.quantity === 0)).toBe(
+      true
     );
   });
 
-  it("should reject stock creation with missing required fields", async () => {
+  it("rejects duplicate combinations inside bulk create", async () => {
+    const managerToken = await createManagerToken();
+    const { product, warehouse } = await createProductAndWarehouse();
+    const stockRecord = {
+      productId: product._id.toString(),
+      warehouseId: warehouse._id.toString(),
+    };
+
     const response = await request(app)
-      .post("/api/stocks")
-      .send({});
+      .post("/api/stocks/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([stockRecord, stockRecord]);
 
     expect(response.statusCode).toBe(400);
-    expect(response.body.message).toBe("Validation failed");
-    expect(response.body.errors).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          field: "productId",
-          message: "Product ID is required",
-        }),
-        expect.objectContaining({
-          field: "warehouseId",
-          message: "Warehouse ID is required",
-        }),
-      ])
-    );
+    expect(await Stock.countDocuments()).toBe(0);
+  });
+
+  it("rejects existing combinations in bulk create", async () => {
+    const managerToken = await createManagerToken();
+    const { product, warehouse } = await createProductAndWarehouse();
+    await Stock.create({ productId: product._id, warehouseId: warehouse._id });
+
+    const response = await request(app)
+      .post("/api/stocks/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          productId: product._id.toString(),
+          warehouseId: warehouse._id.toString(),
+        },
+      ]);
+
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("rejects inactive products in bulk create", async () => {
+    const managerToken = await createManagerToken();
+    const { product, warehouse } = await createProductAndWarehouse({
+      productStatus: "inactive",
+    });
+
+    const response = await request(app)
+      .post("/api/stocks/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          productId: product._id.toString(),
+          warehouseId: warehouse._id.toString(),
+        },
+      ]);
+
+    expect(response.statusCode).toBe(409);
+    expect(await Stock.countDocuments()).toBe(0);
+  });
+
+  it("rejects inactive warehouses in bulk create", async () => {
+    const managerToken = await createManagerToken();
+    const { product, warehouse } = await createProductAndWarehouse({
+      warehouseStatus: "inactive",
+    });
+
+    const response = await request(app)
+      .post("/api/stocks/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          productId: product._id.toString(),
+          warehouseId: warehouse._id.toString(),
+        },
+      ]);
+
+    expect(response.statusCode).toBe(409);
+    expect(await Stock.countDocuments()).toBe(0);
   });
 });

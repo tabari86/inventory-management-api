@@ -1,11 +1,11 @@
 const { body } = require("express-validator");
 
-const registerUserValidation = [
+const createUserValidation = [
   body("name")
+    .trim()
     .notEmpty()
     .withMessage("Name is required")
-    .bail()
-    .trim(),
+    .bail(),
 
   body("email")
     .notEmpty()
@@ -25,8 +25,8 @@ const registerUserValidation = [
 
   body("role")
     .optional()
-    .isIn(["admin", "manager", "viewer"])
-    .withMessage("Invalid user role"),
+    .isIn(["manager", "viewer"])
+    .withMessage("Role must be manager or viewer"),
 ];
 
 const loginUserValidation = [
@@ -51,7 +51,7 @@ const refreshTokenValidation = [
 ];
 
 module.exports = {
-  registerUserValidation,
+  createUserValidation,
   loginUserValidation,
   refreshTokenValidation,
 };

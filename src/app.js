@@ -11,6 +11,7 @@ const stockMovementRoutes = require("./routes/stockMovementRoutes");
 const goodsReceiptRoutes = require("./routes/goodsReceiptRoutes");
 const goodsIssueRoutes = require("./routes/goodsIssueRoutes");
 const authRoutes = require("./routes/authRoutes");
+const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.get("/health", (req, res) => {
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use("/api/auth", authRoutes);
+app.use("/api/users", userRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/warehouses", warehouseRoutes);
 app.use("/api/stocks", stockRoutes);

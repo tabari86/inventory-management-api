@@ -72,6 +72,93 @@ const createStock = async (req, res, next) => {
   }
 };
 
+const createStocksBulk = async (req, res, next) => {
+  try {
+    const stocksToCreate = req.body;
+    const combinations = stocksToCreate.map(
+      (stock) =>
+        `${stock.productId.toLowerCase()}:${stock.warehouseId.toLowerCase()}`
+    );
+
+    if (new Set(combinations).size !== combinations.length) {
+      return res.status(400).json({
+        message: "Duplicate product and warehouse combinations are not allowed",
+      });
+    }
+
+    const productIds = [
+      ...new Set(stocksToCreate.map((stock) => stock.productId.toLowerCase())),
+    ];
+    const warehouseIds = [
+      ...new Set(
+        stocksToCreate.map((stock) => stock.warehouseId.toLowerCase())
+      ),
+    ];
+    const [products, warehouses] = await Promise.all([
+      Product.find({ _id: { $in: productIds } }),
+      Warehouse.find({ _id: { $in: warehouseIds } }),
+    ]);
+
+    if (products.length !== productIds.length) {
+      return res.status(404).json({
+        message: "One or more products were not found",
+      });
+    }
+
+    if (products.some((product) => product.status !== "active")) {
+      return res.status(409).json({
+        message: "Cannot create stock for inactive products",
+      });
+    }
+
+    if (warehouses.length !== warehouseIds.length) {
+      return res.status(404).json({
+        message: "One or more warehouses were not found",
+      });
+    }
+
+    if (warehouses.some((warehouse) => warehouse.status !== "active")) {
+      return res.status(409).json({
+        message: "Cannot create stock for inactive warehouses",
+      });
+    }
+
+    const existingStock = await Stock.findOne({
+      $or: stocksToCreate.map(({ productId, warehouseId }) => ({
+        productId,
+        warehouseId,
+      })),
+    });
+
+    if (existingStock) {
+      return res.status(409).json({
+        message: "One or more stock records already exist",
+      });
+    }
+
+    const stocks = await Stock.insertMany(
+      stocksToCreate.map((stock) => ({ ...stock, quantity: 0 }))
+    );
+
+    return res.status(201).json({
+      message: "Stock records created successfully",
+      data: {
+        createdCount: stocks.length,
+        stocks,
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "One or more stock records already exist",
+      });
+    }
+
+    error.message = "Could not create stock records";
+    next(error);
+  }
+};
+
 const getStocks = async (req, res, next) => {
   try {
     const stocks = await Stock.find()
@@ -121,6 +208,7 @@ const getStockById = async (req, res, next) => {
 
 module.exports = {
   createStock,
+  createStocksBulk,
   getStocks,
   getStockById,
 };

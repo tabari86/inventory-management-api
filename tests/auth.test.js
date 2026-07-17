@@ -1,11 +1,15 @@
 const request = require("supertest");
 
 const app = require("../src/app");
+const {
+  createAccessToken,
+  createTestUser,
+} = require("./helpers/authTestHelper");
 
 require("./setupTestDb");
 
 describe("Auth API", () => {
-  it("should register a new user", async () => {
+  it("does not expose public user registration", async () => {
     const response = await request(app)
       .post("/api/auth/register")
       .send({
@@ -15,46 +19,16 @@ describe("Auth API", () => {
         role: "admin",
       });
 
-    expect(response.statusCode).toBe(201);
-    expect(response.body.message).toBe("User registered successfully");
-    expect(response.body.data).toHaveProperty("id");
-    expect(response.body.data.email).toBe("test.admin@example.com");
-    expect(response.body.data.role).toBe("admin");
-    expect(response.body.data).not.toHaveProperty("password");
+    expect(response.statusCode).toBe(404);
   });
 
-  it("should reject duplicate user registration", async () => {
-    await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Duplicate User",
-        email: "duplicate@example.com",
-        password: "Password123",
-        role: "admin",
-      });
-
-    const response = await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Duplicate User Again",
-        email: "duplicate@example.com",
-        password: "Password123",
-        role: "admin",
-      });
-
-    expect(response.statusCode).toBe(409);
-    expect(response.body.message).toBe("A user with this email already exists");
-  });
-
-  it("should login a registered user", async () => {
-    await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Login User",
-        email: "login.user@example.com",
-        password: "Password123",
-        role: "admin",
-      });
+  it("logs in an existing active user", async () => {
+    await createTestUser({
+      name: "Login User",
+      email: "login.user@example.com",
+      password: "Password123",
+      role: "admin",
+    });
 
     const response = await request(app)
       .post("/api/auth/login")
@@ -71,15 +45,11 @@ describe("Auth API", () => {
     expect(response.body.data.user.role).toBe("admin");
   });
 
-  it("should reject login with wrong password", async () => {
-    await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Wrong Password User",
-        email: "wrong.password@example.com",
-        password: "Password123",
-        role: "admin",
-      });
+  it("rejects login with the wrong password", async () => {
+    await createTestUser({
+      email: "wrong.password@example.com",
+      password: "Password123",
+    });
 
     const response = await request(app)
       .post("/api/auth/login")
@@ -92,31 +62,20 @@ describe("Auth API", () => {
     expect(response.body.message).toBe("Invalid email or password");
   });
 
-  it("should reject current user request without access token", async () => {
+  it("rejects current-user requests without an access token", async () => {
     const response = await request(app).get("/api/auth/me");
 
     expect(response.statusCode).toBe(401);
     expect(response.body.message).toBe("Access token is required");
   });
 
-  it("should return current user with valid access token", async () => {
-    await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Current User",
-        email: "current.user@example.com",
-        password: "Password123",
-        role: "manager",
-      });
-
-    const loginResponse = await request(app)
-      .post("/api/auth/login")
-      .send({
-        email: "current.user@example.com",
-        password: "Password123",
-      });
-
-    const accessToken = loginResponse.body.data.accessToken;
+  it("returns the current user for a valid access token", async () => {
+    const user = await createTestUser({
+      name: "Current User",
+      email: "current.user@example.com",
+      role: "manager",
+    });
+    const accessToken = createAccessToken(user);
 
     const response = await request(app)
       .get("/api/auth/me")
@@ -128,105 +87,59 @@ describe("Auth API", () => {
     expect(response.body.data.role).toBe("manager");
   });
 
-  it("should refresh access token with a valid refresh token", async () => {
-    await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Refresh User",
-        email: "refresh.user@example.com",
-        password: "Password123",
-        role: "admin",
-      });
-
+  it("rotates a valid refresh token", async () => {
+    await createTestUser({
+      email: "refresh.user@example.com",
+      password: "Password123",
+    });
     const loginResponse = await request(app)
       .post("/api/auth/login")
       .send({
         email: "refresh.user@example.com",
         password: "Password123",
       });
-
-    const refreshToken = loginResponse.body.data.refreshToken;
+    const oldRefreshToken = loginResponse.body.data.refreshToken;
 
     const response = await request(app)
       .post("/api/auth/refresh")
-      .send({
-        refreshToken,
-      });
+      .send({ refreshToken: oldRefreshToken });
 
     expect(response.statusCode).toBe(200);
     expect(response.body.message).toBe("Token refreshed successfully");
     expect(response.body.data).toHaveProperty("accessToken");
-    expect(response.body.data).toHaveProperty("refreshToken");
+    expect(response.body.data.refreshToken).not.toBe(oldRefreshToken);
+
+    const reusedTokenResponse = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refreshToken: oldRefreshToken });
+
+    expect(reusedTokenResponse.statusCode).toBe(401);
+    expect(reusedTokenResponse.body.message).toBe("Refresh token has been revoked");
   });
 
-  it("should reject a refresh token after it has been rotated", async () => {
-    await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Rotation User",
-        email: "rotation.user@example.com",
-        password: "Password123",
-        role: "admin",
-      });
-
-    const loginResponse = await request(app)
-      .post("/api/auth/login")
-      .send({
-        email: "rotation.user@example.com",
-        password: "Password123",
-      });
-
-    const oldRefreshToken = loginResponse.body.data.refreshToken;
-
-    await request(app)
-      .post("/api/auth/refresh")
-      .send({
-        refreshToken: oldRefreshToken,
-      });
-
-    const response = await request(app)
-      .post("/api/auth/refresh")
-      .send({
-        refreshToken: oldRefreshToken,
-      });
-
-    expect(response.statusCode).toBe(401);
-    expect(response.body.message).toBe("Refresh token has been revoked");
-  });
-
-  it("should revoke refresh token on logout", async () => {
-    await request(app)
-      .post("/api/auth/register")
-      .send({
-        name: "Logout User",
-        email: "logout.user@example.com",
-        password: "Password123",
-        role: "admin",
-      });
-
+  it("revokes a refresh token on logout", async () => {
+    await createTestUser({
+      email: "logout.user@example.com",
+      password: "Password123",
+    });
     const loginResponse = await request(app)
       .post("/api/auth/login")
       .send({
         email: "logout.user@example.com",
         password: "Password123",
       });
-
     const refreshToken = loginResponse.body.data.refreshToken;
 
     const logoutResponse = await request(app)
       .post("/api/auth/logout")
-      .send({
-        refreshToken,
-      });
+      .send({ refreshToken });
 
     expect(logoutResponse.statusCode).toBe(200);
     expect(logoutResponse.body.message).toBe("Logout successful");
 
     const refreshResponse = await request(app)
       .post("/api/auth/refresh")
-      .send({
-        refreshToken,
-      });
+      .send({ refreshToken });
 
     expect(refreshResponse.statusCode).toBe(401);
     expect(refreshResponse.body.message).toBe("Refresh token has been revoked");

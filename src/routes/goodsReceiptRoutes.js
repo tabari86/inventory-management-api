@@ -2,10 +2,12 @@ const express = require("express");
 
 const {
   createGoodsReceipt,
+  createGoodsReceiptsBulk,
 } = require("../controllers/goodsReceiptController");
 
 const {
   createGoodsReceiptValidation,
+  createBulkGoodsReceiptValidation,
 } = require("../validators/goodsReceiptValidator");
 
 const validateRequest = require("../middleware/validateRequest");
@@ -19,6 +21,15 @@ const {
 } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
+
+router.post(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  createBulkGoodsReceiptValidation,
+  validateRequest,
+  createGoodsReceiptsBulk
+);
 
 
 /**

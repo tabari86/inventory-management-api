@@ -19,11 +19,11 @@ const createWarehouse = async (req, res, next) => {
       });
     }
 
-   const warehouse = await Warehouse.create({
-    code: code.toUpperCase(),
-    name,
-    description,
-    status,
+    const warehouse = await Warehouse.create({
+      code: code.toUpperCase(),
+      name,
+      description,
+      status,
     });
 
     return res.status(201).json({
@@ -32,6 +32,106 @@ const createWarehouse = async (req, res, next) => {
     });
   } catch (error) {
     error.message = "Could not create warehouse";
+    next(error);
+  }
+};
+
+const createWarehousesBulk = async (req, res, next) => {
+  try {
+    const warehousesToCreate = req.body.map((warehouse) => ({
+      ...warehouse,
+      code: warehouse.code.toUpperCase(),
+    }));
+    const codes = warehousesToCreate.map((warehouse) => warehouse.code);
+
+    if (new Set(codes).size !== codes.length) {
+      return res.status(400).json({
+        message: "Duplicate warehouse codes are not allowed in the same request",
+      });
+    }
+
+    const existingWarehouse = await Warehouse.findOne({ code: { $in: codes } });
+
+    if (existingWarehouse) {
+      return res.status(409).json({
+        message: "One or more warehouse codes already exist",
+      });
+    }
+
+    const warehouses = await Warehouse.insertMany(warehousesToCreate);
+
+    return res.status(201).json({
+      message: "Warehouses created successfully",
+      data: {
+        createdCount: warehouses.length,
+        warehouses,
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "One or more warehouse codes already exist",
+      });
+    }
+
+    error.message = "Could not create warehouses";
+    next(error);
+  }
+};
+
+const updateWarehousesBulk = async (req, res, next) => {
+  try {
+    const updates = req.body;
+    const ids = updates.map((warehouse) => warehouse.id);
+
+    if (new Set(ids).size !== ids.length) {
+      return res.status(400).json({
+        message: "Duplicate warehouse IDs are not allowed in the same request",
+      });
+    }
+
+    const warehouses = await Warehouse.find({ _id: { $in: ids } });
+
+    if (warehouses.length !== ids.length) {
+      return res.status(404).json({
+        message: "One or more warehouses were not found",
+      });
+    }
+
+    const updatableFields = ["name", "description", "status"];
+    const operations = updates.map(({ id, ...update }) => {
+      const fieldsToUpdate = {};
+
+      for (const field of updatableFields) {
+        if (Object.prototype.hasOwnProperty.call(update, field)) {
+          fieldsToUpdate[field] = update[field];
+        }
+      }
+
+      return {
+        updateOne: {
+          filter: { _id: id },
+          update: { $set: fieldsToUpdate },
+        },
+      };
+    });
+
+    await Warehouse.bulkWrite(operations);
+
+    const updatedWarehouses = await Warehouse.find({ _id: { $in: ids } });
+    const warehouseById = new Map(
+      updatedWarehouses.map((warehouse) => [warehouse._id.toString(), warehouse])
+    );
+
+    return res.status(200).json({
+      message: "Warehouses updated successfully",
+      data: {
+        updatedCount: updatedWarehouses.length,
+        warehouses: ids.map((id) => warehouseById.get(id)),
+      },
+    });
+  } catch (error) {
+    error.message = "Could not update warehouses";
     next(error);
   }
 };
@@ -140,13 +240,15 @@ const deactivateWarehouse = async (req, res, next) => {
       data: updatedWarehouse,
     });
   } catch (error) {
-        error.message = "Could not deactivate warehouse";
+    error.message = "Could not deactivate warehouse";
     next(error);
   }
 };
 
 module.exports = {
   createWarehouse,
+  createWarehousesBulk,
+  updateWarehousesBulk,
   getWarehouses,
   getWarehouseById,
   updateWarehouse,

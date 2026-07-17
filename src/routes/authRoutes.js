@@ -1,7 +1,6 @@
 const express = require("express");
 
 const {
-  registerUser,
   loginUser,
   refreshAccessToken,
   logoutUser,
@@ -9,7 +8,6 @@ const {
 } = require("../controllers/authController");
 
 const {
-  registerUserValidation,
   loginUserValidation,
   refreshTokenValidation,
 } = require("../validators/userValidator");
@@ -21,54 +19,6 @@ const {
 } = require("../middleware/authMiddleware");
 
 const router = express.Router();
-
-
-/**
- * @swagger
- * /api/auth/register:
- *   post:
- *     summary: Register a new user
- *     tags:
- *       - Authentication
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - name
- *               - email
- *               - password
- *             properties:
- *               name:
- *                 type: string
- *                 example: Admin User
- *               email:
- *                 type: string
- *                 example: admin@example.com
- *               password:
- *                 type: string
- *                 example: Password123
- *               role:
- *                 type: string
- *                 enum: [admin, manager, viewer]
- *                 example: admin
- *     responses:
- *       201:
- *         description: User registered successfully
- *       400:
- *         description: Validation failed
- *       409:
- *         description: User with this email already exists
- */
-
-router.post(
-  "/register",
-  registerUserValidation,
-  validateRequest,
-  registerUser
-);
 
 
 /**

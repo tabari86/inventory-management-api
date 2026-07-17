@@ -2,15 +2,19 @@ const express = require("express");
 
 const {
   createStock,
+  createStocksBulk,
   getStocks,
   getStockById,
 } = require("../controllers/stockController");
 
 const {
   createStockValidation,
+  createBulkStocksValidation,
 } = require("../validators/stockValidator");
 
 const validateRequest = require("../middleware/validateRequest");
+const { authenticateUser } = require("../middleware/authMiddleware");
+const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
@@ -28,7 +32,21 @@ const router = express.Router();
  *       500:
  *         description: Could not retrieve stock records
  */
-router.get("/", getStocks);
+router.get(
+  "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getStocks
+);
+
+router.post(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  createBulkStocksValidation,
+  validateRequest,
+  createStocksBulk
+);
 
 
 /**
@@ -53,7 +71,12 @@ router.get("/", getStocks);
  *       404:
  *         description: Stock record not found
  */
-router.get("/:id", getStockById);
+router.get(
+  "/:id",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getStockById
+);
 
 
 /**
@@ -93,6 +116,8 @@ router.get("/:id", getStockById);
  */
 router.post(
   "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
   createStockValidation,
   validateRequest,
   createStock

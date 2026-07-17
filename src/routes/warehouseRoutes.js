@@ -1,17 +1,24 @@
 const express = require("express");
 const {
   createWarehouseValidation,
+  updateWarehouseValidation,
+  createBulkWarehousesValidation,
+  updateBulkWarehousesValidation,
 } = require("../validators/warehouseValidator");
 
 const validateRequest = require("../middleware/validateRequest");
 
 const {
   createWarehouse,
+  createWarehousesBulk,
+  updateWarehousesBulk,
   getWarehouses,
   getWarehouseById,
   updateWarehouse,
   deactivateWarehouse,
 } = require("../controllers/warehouseController");
+const { authenticateUser } = require("../middleware/authMiddleware");
+const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
@@ -30,7 +37,30 @@ const router = express.Router();
  *       500:
  *         description: Could not retrieve warehouses
  */
-router.get("/", getWarehouses);
+router.get(
+  "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getWarehouses
+);
+
+router.post(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  createBulkWarehousesValidation,
+  validateRequest,
+  createWarehousesBulk
+);
+
+router.patch(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  updateBulkWarehousesValidation,
+  validateRequest,
+  updateWarehousesBulk
+);
 
 
 
@@ -57,7 +87,12 @@ router.get("/", getWarehouses);
  *       404:
  *         description: Warehouse not found
  */
-router.get("/:id", getWarehouseById);
+router.get(
+  "/:id",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getWarehouseById
+);
 
 
 
@@ -104,6 +139,8 @@ router.get("/:id", getWarehouseById);
  */
 router.post(
   "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
   createWarehouseValidation,
   validateRequest,
   createWarehouse
@@ -152,7 +189,14 @@ router.post(
  *       500:
  *         description: Could not update warehouse
  */
-router.patch("/:id", updateWarehouse);
+router.patch(
+  "/:id",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  updateWarehouseValidation,
+  validateRequest,
+  updateWarehouse
+);
 
 
 
@@ -180,6 +224,11 @@ router.patch("/:id", updateWarehouse);
  *       500:
  *         description: Could not deactivate warehouse
  */
-router.patch("/:id/deactivate", deactivateWarehouse);
+router.patch(
+  "/:id/deactivate",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  deactivateWarehouse
+);
 
 module.exports = router;

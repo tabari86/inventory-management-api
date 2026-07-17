@@ -1,55 +1,6 @@
 const mongoose = require("mongoose");
 
-const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
-
-const createStockMovement = async (req, res, next) => {
-  try {
-    const { stockId, type, quantity, reference, reason } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(stockId)) {
-      return res.status(400).json({
-        message: "Invalid stock ID",
-      });
-    }
-
-    if (!type || !quantity) {
-      return res.status(400).json({
-        message: "Movement type and quantity are required",
-      });
-    }
-
-    if (quantity <= 0) {
-      return res.status(400).json({
-        message: "Quantity must be greater than 0",
-      });
-    }
-
-    const stock = await Stock.findById(stockId);
-
-    if (!stock) {
-      return res.status(404).json({
-        message: "Stock record not found",
-      });
-    }
-
-    const stockMovement = await StockMovement.create({
-      stockId,
-      type,
-      quantity,
-      reference,
-      reason,
-    });
-
-    return res.status(201).json({
-      message: "Stock movement created successfully",
-      data: stockMovement,
-    });
-  } catch (error) {
-    error.message = "Could not create stock movement";
-    next(error);
-  }
-};
 
 const getStockMovements = async (req, res, next) => {
   try {
@@ -120,7 +71,6 @@ const getStockMovementById = async (req, res, next) => {
 };
 
 module.exports = {
-  createStockMovement,
   getStockMovements,
   getStockMovementById,
 };

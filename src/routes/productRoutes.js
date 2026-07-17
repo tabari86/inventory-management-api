@@ -1,18 +1,27 @@
 const express = require("express");
 const {
   createProductValidation,
+  updateProductValidation,
+  createBulkProductsValidation,
+  updateBulkProductsValidation,
+  deleteBulkProductsValidation,
 } = require("../validators/productValidator");
 
 const validateRequest = require("../middleware/validateRequest");
 
 const {
   createProduct,
+  createProductsBulk,
+  updateProductsBulk,
+  deleteProductsBulk,
   getProducts,
   getProductById,
   updateProduct,
   deactivateProduct,
   deleteProduct,
 } = require("../controllers/productController");
+const { authenticateUser } = require("../middleware/authMiddleware");
+const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
@@ -31,7 +40,39 @@ const router = express.Router();
  *       500:
  *         description: Could not retrieve products
  */
-router.get("/", getProducts);
+router.get(
+  "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getProducts
+);
+
+router.post(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  createBulkProductsValidation,
+  validateRequest,
+  createProductsBulk
+);
+
+router.patch(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  updateBulkProductsValidation,
+  validateRequest,
+  updateProductsBulk
+);
+
+router.delete(
+  "/bulk",
+  authenticateUser,
+  authorizeRoles("admin"),
+  deleteBulkProductsValidation,
+  validateRequest,
+  deleteProductsBulk
+);
 
 
 
@@ -57,7 +98,12 @@ router.get("/", getProducts);
  *       404:
  *         description: Product not found
  */
-router.get("/:id", getProductById);
+router.get(
+  "/:id",
+  authenticateUser,
+  authorizeRoles("admin", "manager", "viewer"),
+  getProductById
+);
 
 
 
@@ -107,6 +153,8 @@ router.get("/:id", getProductById);
  */
 router.post(
   "/",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
   createProductValidation,
   validateRequest,
   createProduct
@@ -162,7 +210,14 @@ router.post(
  *       409:
  *         description: Product with this SKU already exists
  */
-router.patch("/:id", updateProduct);
+router.patch(
+  "/:id",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  updateProductValidation,
+  validateRequest,
+  updateProduct
+);
 
 
 
@@ -188,7 +243,12 @@ router.patch("/:id", updateProduct);
  *       404:
  *         description: Product not found
  */
-router.patch("/:id/deactivate", deactivateProduct);
+router.patch(
+  "/:id/deactivate",
+  authenticateUser,
+  authorizeRoles("admin", "manager"),
+  deactivateProduct
+);
 
 
 
@@ -216,7 +276,12 @@ router.patch("/:id/deactivate", deactivateProduct);
  *       409:
  *         description: Active products must be deactivated before deletion
  */
-router.delete("/:id", deleteProduct);
+router.delete(
+  "/:id",
+  authenticateUser,
+  authorizeRoles("admin"),
+  deleteProduct
+);
 
 
 module.exports = router;

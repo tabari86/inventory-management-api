@@ -51,6 +51,70 @@ const createGoodsReceipt = async (req, res, next) => {
   }
 };
 
+const createGoodsReceiptsBulk = async (req, res, next) => {
+  const updatedStockTotals = [];
+  let createdMovementIds = [];
+
+  try {
+    const receipts = req.body;
+    const quantityByStockId = new Map();
+
+    for (const receipt of receipts) {
+      const stockId = receipt.stockId.toLowerCase();
+      const currentQuantity = quantityByStockId.get(stockId) || 0;
+      quantityByStockId.set(stockId, currentQuantity + receipt.quantity);
+    }
+
+    const stockIds = [...quantityByStockId.keys()];
+    const stocks = await Stock.find({ _id: { $in: stockIds } });
+
+    if (stocks.length !== stockIds.length) {
+      return res.status(404).json({
+        message: "One or more stock records were not found",
+      });
+    }
+
+    for (const [stockId, quantity] of quantityByStockId) {
+      await Stock.updateOne({ _id: stockId }, { $inc: { quantity } });
+      updatedStockTotals.push({ stockId, quantity });
+    }
+
+    const stockMovements = await StockMovement.insertMany(
+      receipts.map((receipt) => ({
+        ...receipt,
+        type: "GOODS_RECEIPT",
+      }))
+    );
+    createdMovementIds = stockMovements.map((movement) => movement._id);
+    const updatedStocks = await Stock.find({ _id: { $in: stockIds } });
+
+    return res.status(201).json({
+      message: "Goods receipts completed successfully",
+      data: {
+        processedCount: stockMovements.length,
+        stockMovements,
+        updatedStocks,
+      },
+    });
+  } catch (error) {
+    if (createdMovementIds.length > 0) {
+      await StockMovement.deleteMany({ _id: { $in: createdMovementIds } });
+    }
+
+    if (updatedStockTotals.length > 0) {
+      await Promise.all(
+        updatedStockTotals.map(({ stockId, quantity }) =>
+          Stock.updateOne({ _id: stockId }, { $inc: { quantity: -quantity } })
+        )
+      );
+    }
+
+    error.message = "Could not complete goods receipts";
+    next(error);
+  }
+};
+
 module.exports = {
   createGoodsReceipt,
+  createGoodsReceiptsBulk,
 };
