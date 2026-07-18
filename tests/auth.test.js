@@ -1,6 +1,7 @@
 const request = require("supertest");
 
 const app = require("../src/app");
+const RefreshToken = require("../src/models/RefreshToken");
 const {
   createAccessToken,
   createTestUser,
@@ -9,6 +10,10 @@ const {
 require("./setupTestDb");
 
 describe("Auth API", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it("does not expose public user registration", async () => {
     const response = await request(app)
       .post("/api/auth/register")
@@ -143,5 +148,135 @@ describe("Auth API", () => {
 
     expect(refreshResponse.statusCode).toBe(401);
     expect(refreshResponse.body.message).toBe("Refresh token has been revoked");
+  });
+
+  it("revokes older sessions when the same user logs in again", async () => {
+    const credentials = {
+      email: "session.hygiene@example.com",
+      password: "Password123",
+    };
+    await createTestUser(credentials);
+
+    const firstLogin = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+    const secondLogin = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+
+    const oldTokenResponse = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refreshToken: firstLogin.body.data.refreshToken });
+    const latestTokenResponse = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refreshToken: secondLogin.body.data.refreshToken });
+
+    expect(firstLogin.statusCode).toBe(200);
+    expect(secondLogin.statusCode).toBe(200);
+    expect(oldTokenResponse.statusCode).toBe(401);
+    expect(oldTokenResponse.body.message).toBe("Refresh token has been revoked");
+    expect(latestTokenResponse.statusCode).toBe(200);
+  });
+
+  it("does not revoke an existing session when new refresh token creation fails", async () => {
+    const credentials = {
+      email: "token.creation.failure@example.com",
+      password: "Password123",
+    };
+    await createTestUser(credentials);
+
+    const firstLogin = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+    const createSpy = jest
+      .spyOn(RefreshToken, "create")
+      .mockRejectedValueOnce(new Error("simulated token storage failure"));
+
+    const failedLogin = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+
+    createSpy.mockRestore();
+
+    const existingTokenResponse = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refreshToken: firstLogin.body.data.refreshToken });
+
+    expect(firstLogin.statusCode).toBe(200);
+    expect(failedLogin.statusCode).toBe(500);
+    expect(existingTokenResponse.statusCode).toBe(200);
+  });
+
+  it("keeps the newly created session usable when old-session cleanup fails", async () => {
+    const credentials = {
+      email: "token.cleanup.failure@example.com",
+      password: "Password123",
+    };
+    await createTestUser(credentials);
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    jest
+      .spyOn(RefreshToken, "updateMany")
+      .mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+    const loginResponse = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+    const refreshResponse = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refreshToken: loginResponse.body.data.refreshToken });
+
+    expect(loginResponse.statusCode).toBe(200);
+    expect(refreshResponse.statusCode).toBe(200);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Could not revoke previous refresh tokens")
+    );
+  });
+
+  it("allows a correct login below the failed-attempt limit", async () => {
+    const credentials = {
+      email: "below.limit@example.com",
+      password: "Password123",
+    };
+    await createTestUser(credentials);
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const failedResponse = await request(app)
+        .post("/api/auth/login")
+        .send({ ...credentials, password: "WrongPassword123" });
+
+      expect(failedResponse.statusCode).toBe(401);
+    }
+
+    const successResponse = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+
+    expect(successResponse.statusCode).toBe(200);
+  });
+
+  it("rate limits repeated failed login attempts", async () => {
+    let throttledResponse;
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const response = await request(app)
+        .post("/api/auth/login")
+        .send({
+          email:
+            attempt % 2 === 0
+              ? "Rate.Limit@Example.com"
+              : "rate.limit@example.com",
+          password: "WrongPassword123",
+        });
+
+      if (response.statusCode === 429) {
+        throttledResponse = response;
+        break;
+      }
+    }
+
+    expect(throttledResponse).toBeDefined();
+    expect(throttledResponse.body.message).toBe(
+      "Too many login attempts. Please try again later."
+    );
   });
 });

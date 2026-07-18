@@ -2,14 +2,38 @@ const { body } = require("express-validator");
 
 const createProductValidation = [
   body("sku")
+    .notEmpty()
+    .withMessage("SKU is required")
+    .bail()
+    .isString()
+    .withMessage("SKU must be a string")
+    .bail()
     .trim()
     .notEmpty()
-    .withMessage("SKU is required"),
+    .withMessage("SKU is required")
+    .bail()
+    .customSanitizer((value) => value.toUpperCase())
+    .isLength({ max: 64 })
+    .withMessage("SKU must be at most 64 characters long")
+    .matches(/^[A-Z0-9_-]+$/)
+    .withMessage("SKU may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("name")
     .trim()
     .notEmpty()
-    .withMessage("Product name is required"),
+    .withMessage("Product name is required")
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Product name must be at most 120 characters long"),
+
+  body("description")
+    .optional()
+    .isString()
+    .withMessage("Description must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("unit")
     .optional()
@@ -42,22 +66,36 @@ const updateProductValidation = [
 
   body("sku")
     .optional()
+    .isString()
+    .withMessage("SKU must be a string")
+    .bail()
     .trim()
     .notEmpty()
-    .withMessage("SKU cannot be empty"),
+    .withMessage("SKU cannot be empty")
+    .bail()
+    .customSanitizer((value) => value.toUpperCase())
+    .isLength({ max: 64 })
+    .withMessage("SKU must be at most 64 characters long")
+    .matches(/^[A-Z0-9_-]+$/)
+    .withMessage("SKU may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("name")
     .optional()
     .trim()
     .notEmpty()
-    .withMessage("Product name cannot be empty"),
+    .withMessage("Product name cannot be empty")
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Product name must be at most 120 characters long"),
 
   body("description")
     .optional()
     .isString()
     .withMessage("Description must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("unit")
     .optional()
@@ -76,23 +114,38 @@ const createBulkProductsValidation = [
     .withMessage("Body must be an array containing between 1 and 150 products"),
 
   body("*.sku")
+    .notEmpty()
+    .withMessage("SKU is required")
+    .bail()
+    .isString()
+    .withMessage("SKU must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("SKU is required")
-    .bail(),
+    .bail()
+    .customSanitizer((value) => value.toUpperCase())
+    .isLength({ max: 64 })
+    .withMessage("SKU must be at most 64 characters long")
+    .matches(/^[A-Z0-9_-]+$/)
+    .withMessage("SKU may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("*.name")
     .trim()
     .notEmpty()
     .withMessage("Product name is required")
-    .bail(),
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Product name must be at most 120 characters long"),
 
   body("*.description")
     .optional()
     .isString()
     .withMessage("Description must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("*.unit")
     .optional()
@@ -136,24 +189,36 @@ const updateBulkProductsValidation = [
 
   body("*.sku")
     .optional()
+    .isString()
+    .withMessage("SKU must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("SKU cannot be empty")
-    .bail(),
+    .bail()
+    .customSanitizer((value) => value.toUpperCase())
+    .isLength({ max: 64 })
+    .withMessage("SKU must be at most 64 characters long")
+    .matches(/^[A-Z0-9_-]+$/)
+    .withMessage("SKU may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("*.name")
     .optional()
     .trim()
     .notEmpty()
     .withMessage("Product name cannot be empty")
-    .bail(),
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Product name must be at most 120 characters long"),
 
   body("*.description")
     .optional()
     .isString()
     .withMessage("Description must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("*.unit")
     .optional()

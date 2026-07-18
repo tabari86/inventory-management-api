@@ -232,4 +232,43 @@ describe("Warehouse API", () => {
       "Original Bulk Name"
     );
   });
+
+  it("rejects a non-string warehouse description", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/warehouses")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({
+        code: "WH-DESCRIPTION-001",
+        name: "Description Validation Warehouse",
+        description: ["invalid"],
+      });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("rejects a warehouse code containing unsupported characters", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/warehouses")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ code: "INVALID CODE!", name: "Invalid Code Warehouse" });
+
+    expect(response.statusCode).toBe(400);
+    expect(await Warehouse.countDocuments()).toBe(0);
+  });
+
+  it("rejects a warehouse code longer than 64 characters", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/warehouses")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ code: "W".repeat(65), name: "Long Code Warehouse" });
+
+    expect(response.statusCode).toBe(400);
+    expect(await Warehouse.countDocuments()).toBe(0);
+  });
 });

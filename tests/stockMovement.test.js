@@ -108,4 +108,16 @@ describe("Stock Movement API", () => {
     expect(response.statusCode).toBe(404);
     expect(await StockMovement.countDocuments()).toBe(0);
   });
+
+  it("restricts movement types to implemented goods workflows", async () => {
+    const stock = await createTestStock();
+
+    await expect(
+      StockMovement.create({
+        stockId: stock._id,
+        type: "ADJUSTMENT",
+        quantity: 1,
+      })
+    ).rejects.toThrow();
+  });
 });

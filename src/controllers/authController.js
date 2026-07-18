@@ -51,11 +51,26 @@ const loginUser = async (req, res, next) => {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    await RefreshToken.create({
+    const storedRefreshToken = await RefreshToken.create({
       userId: user._id,
       tokenHash: refreshTokenHash,
       expiresAt,
     });
+
+    try {
+      await RefreshToken.updateMany(
+        {
+          userId: user._id,
+          _id: { $ne: storedRefreshToken._id },
+          isRevoked: false,
+        },
+        { $set: { isRevoked: true } }
+      );
+    } catch (revocationError) {
+      console.error(
+        `Could not revoke previous refresh tokens: ${revocationError.message}`
+      );
+    }
 
     return res.status(200).json({
       message: "Login successful",

@@ -1,4 +1,5 @@
 const express = require("express");
+const helmet = require("helmet");
 const swaggerUi = require("swagger-ui-express");
 
 const swaggerSpec = require("./config/swagger");
@@ -15,6 +16,23 @@ const userRoutes = require("./routes/userRoutes");
 
 const app = express();
 
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+  })
+);
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -30,6 +48,7 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Swagger UI is intentionally public for portfolio and demo visibility.
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use("/api/auth", authRoutes);

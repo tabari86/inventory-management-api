@@ -1,7 +1,7 @@
 {
   "name": "inventory-management-api",
   "version": "1.0.0",
-  "description": "",
+  "description": "Backend REST API for inventory, warehouse, stock and goods movement management.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -9,21 +9,33 @@
     "seed:admin": "node scripts/seedAdmin.js",
     "test": "jest --runInBand"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "nodejs",
+    "express",
+    "mongodb",
+    "rest-api",
+    "inventory-management",
+    "warehouse-management",
+    "swagger",
+    "backend"
+  ],
+  "author": "Mojtaba Tabari",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "bcrypt": "^6.0.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.0",
     "express-validator": "^7.3.2",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.6.3",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
     "jest": "^30.4.2",
     "mongodb-memory-server": "^11.2.0",
     "nodemon": "^3.1.14",

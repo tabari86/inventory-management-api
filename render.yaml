@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: inventory-management-api
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        sync: false
+      - key: SWAGGER_PRODUCTION_URL
+        value: https://inventory-management-api-6zuo.onrender.com

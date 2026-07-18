@@ -9,6 +9,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY src ./src
+COPY scripts/seedAdmin.js ./scripts/seedAdmin.js
 
 USER node
 

@@ -5,7 +5,9 @@ const createUserValidation = [
     .trim()
     .notEmpty()
     .withMessage("Name is required")
-    .bail(),
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Name must be at most 120 characters long"),
 
   body("email")
     .notEmpty()

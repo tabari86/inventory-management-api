@@ -13,13 +13,13 @@ const {
 } = require("../validators/userValidator");
 
 const validateRequest = require("../middleware/validateRequest");
+const loginRateLimiter = require("../middleware/loginRateLimiter");
 
 const {
   authenticateUser,
 } = require("../middleware/authMiddleware");
 
 const router = express.Router();
-
 
 /**
  * @swagger
@@ -51,18 +51,25 @@ const router = express.Router();
  *         description: Validation failed
  *       401:
  *         description: Invalid email or password
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  *       403:
  *         description: User account is inactive
+ *       429:
+ *         description: Too many login attempts
+ *       500:
+ *         description: Could not login user
  */
 
 router.post(
   "/login",
+  loginRateLimiter,
   loginUserValidation,
   validateRequest,
   loginUser
 );
-
-
 
 /**
  * @swagger
@@ -90,6 +97,10 @@ router.post(
  *         description: Validation failed
  *       401:
  *         description: Invalid, expired or revoked refresh token
+ *       403:
+ *         description: User account is inactive
+ *       500:
+ *         description: Could not refresh token
  */
 
 router.post(
@@ -98,8 +109,6 @@ router.post(
   validateRequest,
   refreshAccessToken
 );
-
-
 
 /**
  * @swagger
@@ -123,10 +132,15 @@ router.post(
  *     responses:
  *       200:
  *         description: Logout successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessMessageResponse'
  *       400:
  *         description: Validation failed
+ *       500:
+ *         description: Could not logout user
  */
-
 
 router.post(
   "/logout",
@@ -135,13 +149,12 @@ router.post(
   logoutUser
 );
 
-
-
 /**
  * @swagger
  * /api/auth/me:
  *   get:
  *     summary: Get current authenticated user
+ *     description: Returns the current authenticated active user.
  *     tags:
  *       - Authentication
  *     security:
@@ -150,9 +163,11 @@ router.post(
  *       200:
  *         description: Current user retrieved successfully
  *       401:
- *         description: Access token is missing, invalid or expired
+ *         description: Access token is missing or invalid
  *       403:
  *         description: User account is inactive
+ *       500:
+ *         description: Could not retrieve current user
  */
 
 router.get(

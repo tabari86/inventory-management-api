@@ -22,18 +22,23 @@ const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
-
-
 /**
  * @swagger
  * /api/warehouses:
  *   get:
  *     summary: Retrieve all warehouses
+ *     description: Available to admin, manager, and viewer roles.
  *     tags:
  *       - Warehouses
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Warehouses retrieved successfully
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       500:
  *         description: Could not retrieve warehouses
  */
@@ -44,6 +49,65 @@ router.get(
   getWarehouses
 );
 
+/**
+ * @swagger
+ * /api/warehouses/bulk:
+ *   post:
+ *     summary: Create multiple warehouses
+ *     description: Creates between 1 and 150 warehouses. Available to admin and manager roles.
+ *     tags:
+ *       - Warehouses
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: array
+ *             minItems: 1
+ *             maxItems: 150
+ *             items:
+ *               type: object
+ *               required:
+ *                 - code
+ *                 - name
+ *               properties:
+ *                 code:
+ *                   type: string
+ *                   maxLength: 64
+ *                   pattern: '^[A-Z0-9_-]+$'
+ *                   example: WH-BULK-001
+ *                 name:
+ *                   type: string
+ *                   maxLength: 120
+ *                   example: Bulk Warehouse One
+ *                 description:
+ *                   type: string
+ *                   maxLength: 500
+ *                   example: Warehouse created in a bulk request
+ *                 status:
+ *                   type: string
+ *                   enum: [active, inactive]
+ *                   example: active
+ *     responses:
+ *       201:
+ *         description: Warehouses created successfully; response data includes createdCount and warehouses
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/BulkWarehousesResponse'
+ *       400:
+ *         description: Validation failed or duplicate warehouse codes were provided in the request
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
+ *       409:
+ *         description: One or more warehouse codes already exist
+ *       500:
+ *         description: Could not create warehouses
+ */
 router.post(
   "/bulk",
   authenticateUser,
@@ -53,6 +117,63 @@ router.post(
   createWarehousesBulk
 );
 
+/**
+ * @swagger
+ * /api/warehouses/bulk:
+ *   patch:
+ *     summary: Update multiple warehouses
+ *     description: Updates between 1 and 150 warehouses. Each item requires an ID and at least one of name, description, or status; warehouse codes cannot be changed. Available to admin and manager roles.
+ *     tags:
+ *       - Warehouses
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: array
+ *             minItems: 1
+ *             maxItems: 150
+ *             items:
+ *               type: object
+ *               minProperties: 2
+ *               required:
+ *                 - id
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                   example: 6a23ebc39ca1ca27984458d2
+ *                 name:
+ *                   type: string
+ *                   maxLength: 120
+ *                   example: Updated Warehouse
+ *                 description:
+ *                   type: string
+ *                   maxLength: 500
+ *                   example: Updated warehouse description
+ *                 status:
+ *                   type: string
+ *                   enum: [active, inactive]
+ *                   example: inactive
+ *     responses:
+ *       200:
+ *         description: Warehouses updated successfully; response data includes updatedCount and warehouses
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/BulkWarehousesResponse'
+ *       400:
+ *         description: Validation failed or duplicate warehouse IDs were provided
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
+ *       404:
+ *         description: One or more warehouses were not found
+ *       500:
+ *         description: Could not update warehouses
+ */
 router.patch(
   "/bulk",
   authenticateUser,
@@ -62,16 +183,16 @@ router.patch(
   updateWarehousesBulk
 );
 
-
-
-
 /**
  * @swagger
  * /api/warehouses/{id}:
  *   get:
  *     summary: Retrieve a single warehouse
+ *     description: Available to admin, manager, and viewer roles.
  *     tags:
  *       - Warehouses
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -84,8 +205,14 @@ router.patch(
  *         description: Warehouse retrieved successfully
  *       400:
  *         description: Invalid warehouse ID
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       404:
  *         description: Warehouse not found
+ *       500:
+ *         description: Could not retrieve warehouse
  */
 router.get(
   "/:id",
@@ -94,16 +221,16 @@ router.get(
   getWarehouseById
 );
 
-
-
-
 /**
  * @swagger
  * /api/warehouses:
  *   post:
  *     summary: Create a new warehouse
+ *     description: Available to admin and manager roles.
  *     tags:
  *       - Warehouses
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -116,12 +243,16 @@ router.get(
  *             properties:
  *               code:
  *                 type: string
+ *                 maxLength: 64
+ *                 pattern: '^[A-Z0-9_-]+$'
  *                 example: WH-STU
  *               name:
  *                 type: string
+ *                 maxLength: 120
  *                 example: Main Warehouse
  *               description:
  *                 type: string
+ *                 maxLength: 500
  *                 example: Primary warehouse for incoming and outgoing goods
  *               status:
  *                 type: string
@@ -132,6 +263,10 @@ router.get(
  *         description: Warehouse created successfully
  *       400:
  *         description: Validation failed
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       409:
  *         description: Warehouse with this code already exists
  *       500:
@@ -146,15 +281,16 @@ router.post(
   createWarehouse
 );
 
-
-
 /**
  * @swagger
  * /api/warehouses/{id}:
  *   patch:
  *     summary: Update warehouse information
+ *     description: Warehouse codes cannot be changed; at least one of name, description, or status is required. Available to admin and manager roles.
  *     tags:
  *       - Warehouses
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -168,12 +304,15 @@ router.post(
  *         application/json:
  *           schema:
  *             type: object
+ *             minProperties: 1
  *             properties:
  *               name:
  *                 type: string
+ *                 maxLength: 120
  *                 example: Main Warehouse Germany
  *               description:
  *                 type: string
+ *                 maxLength: 500
  *                 example: Updated warehouse description
  *               status:
  *                 type: string
@@ -184,6 +323,10 @@ router.post(
  *         description: Warehouse updated successfully
  *       400:
  *         description: Invalid warehouse ID
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       404:
  *         description: Warehouse not found
  *       500:
@@ -198,15 +341,16 @@ router.patch(
   updateWarehouse
 );
 
-
-
 /**
  * @swagger
  * /api/warehouses/{id}/deactivate:
  *   patch:
  *     summary: Deactivate a warehouse
+ *     description: Available to admin and manager roles.
  *     tags:
  *       - Warehouses
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -219,6 +363,10 @@ router.patch(
  *         description: Warehouse deactivated successfully
  *       400:
  *         description: Invalid warehouse ID
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       404:
  *         description: Warehouse not found
  *       500:

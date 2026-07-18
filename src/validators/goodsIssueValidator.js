@@ -16,11 +16,21 @@ const createGoodsIssueValidation = [
 
   body("reference")
     .optional()
-    .trim(),
+    .isString()
+    .withMessage("Reference must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage("Reference must be at most 100 characters long"),
 
   body("reason")
     .optional()
-    .trim(),
+    .isString()
+    .withMessage("Reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Reason must be at most 500 characters long"),
 ];
 
 const createBulkGoodsIssueValidation = [
@@ -48,14 +58,18 @@ const createBulkGoodsIssueValidation = [
     .isString()
     .withMessage("Reference must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage("Reference must be at most 100 characters long"),
 
   body("*.reason")
     .optional()
     .isString()
     .withMessage("Reason must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Reason must be at most 500 characters long"),
 ];
 
 module.exports = {

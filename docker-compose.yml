@@ -8,8 +8,11 @@ services:
       NODE_ENV: production
       PORT: 3000
       MONGODB_URI: mongodb://mongo:27017/inventory_management
-      JWT_ACCESS_SECRET: docker_access_token_secret
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-docker_local_access_token_secret}
       JWT_ACCESS_EXPIRES_IN: 15m
+      ADMIN_NAME: ${ADMIN_NAME:-Local Admin}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_this_local_admin_password}
     depends_on:
       mongo:
         condition: service_healthy
@@ -19,6 +22,20 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  seed-admin:
+    build: .
+    profiles: ["seed"]
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/inventory_management
+      ADMIN_NAME: ${ADMIN_NAME:-Local Admin}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_this_local_admin_password}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: npm run seed:admin
+    restart: "no"
 
   mongo:
     image: mongo:8

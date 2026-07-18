@@ -25,18 +25,23 @@ const { authorizeRoles } = require("../middleware/roleMiddleware");
 
 const router = express.Router();
 
-
-
 /**
  * @swagger
  * /api/products:
  *   get:
  *     summary: Retrieve all products
+ *     description: Available to admin, manager, and viewer roles.
  *     tags:
  *       - Products
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Products retrieved successfully
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       500:
  *         description: Could not retrieve products
  */
@@ -47,6 +52,69 @@ router.get(
   getProducts
 );
 
+/**
+ * @swagger
+ * /api/products/bulk:
+ *   post:
+ *     summary: Create multiple products
+ *     description: Creates between 1 and 150 products. Available to admin and manager roles.
+ *     tags:
+ *       - Products
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: array
+ *             minItems: 1
+ *             maxItems: 150
+ *             items:
+ *               type: object
+ *               required:
+ *                 - sku
+ *                 - name
+ *               properties:
+ *                 sku:
+ *                   type: string
+ *                   maxLength: 64
+ *                   pattern: '^[A-Z0-9_-]+$'
+ *                   example: BULK-001
+ *                 name:
+ *                   type: string
+ *                   maxLength: 120
+ *                   example: Bulk Product One
+ *                 description:
+ *                   type: string
+ *                   maxLength: 500
+ *                   example: Product created in a bulk request
+ *                 unit:
+ *                   type: string
+ *                   enum: [piece, kg, liter, meter]
+ *                   example: piece
+ *                 status:
+ *                   type: string
+ *                   enum: [active, inactive]
+ *                   example: active
+ *     responses:
+ *       201:
+ *         description: Products created successfully; response data includes createdCount and products
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/BulkProductsResponse'
+ *       400:
+ *         description: Validation failed or duplicate SKUs were provided in the request
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
+ *       409:
+ *         description: One or more product SKUs already exist
+ *       500:
+ *         description: Could not create products
+ */
 router.post(
   "/bulk",
   authenticateUser,
@@ -56,6 +124,74 @@ router.post(
   createProductsBulk
 );
 
+/**
+ * @swagger
+ * /api/products/bulk:
+ *   patch:
+ *     summary: Update multiple products
+ *     description: Updates between 1 and 150 products. Each item requires an ID and at least one updatable product field. Available to admin and manager roles.
+ *     tags:
+ *       - Products
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: array
+ *             minItems: 1
+ *             maxItems: 150
+ *             items:
+ *               type: object
+ *               minProperties: 2
+ *               required:
+ *                 - id
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                   example: 6a24186174ab9f90ef69cb14
+ *                 sku:
+ *                   type: string
+ *                   maxLength: 64
+ *                   pattern: '^[A-Z0-9_-]+$'
+ *                   example: BULK-001-UPDATED
+ *                 name:
+ *                   type: string
+ *                   maxLength: 120
+ *                   example: Updated Bulk Product
+ *                 description:
+ *                   type: string
+ *                   maxLength: 500
+ *                   example: Updated product description
+ *                 unit:
+ *                   type: string
+ *                   enum: [piece, kg, liter, meter]
+ *                   example: piece
+ *                 status:
+ *                   type: string
+ *                   enum: [active, inactive]
+ *                   example: inactive
+ *     responses:
+ *       200:
+ *         description: Products updated successfully; response data includes updatedCount and products
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/BulkProductsResponse'
+ *       400:
+ *         description: Validation failed or duplicate product IDs or SKUs were provided
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
+ *       404:
+ *         description: One or more products were not found
+ *       409:
+ *         description: One or more product SKUs already exist
+ *       500:
+ *         description: Could not update products
+ */
 router.patch(
   "/bulk",
   authenticateUser,
@@ -65,6 +201,54 @@ router.patch(
   updateProductsBulk
 );
 
+/**
+ * @swagger
+ * /api/products/bulk:
+ *   delete:
+ *     summary: Delete multiple inactive products
+ *     description: Deletes between 1 and 150 inactive products. Available to the admin role only.
+ *     tags:
+ *       - Products
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - ids
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 minItems: 1
+ *                 maxItems: 150
+ *                 items:
+ *                   type: string
+ *                 example:
+ *                   - 6a24186174ab9f90ef69cb14
+ *                   - 6a24186174ab9f90ef69cb15
+ *     responses:
+ *       200:
+ *         description: Products deleted successfully; response data includes deletedCount
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/BulkProductsResponse'
+ *       400:
+ *         description: Validation failed or duplicate product IDs were provided
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
+ *       404:
+ *         description: One or more products were not found
+ *       409:
+ *         description: One or more products are active and must be deactivated before deletion
+ *       500:
+ *         description: Could not delete products
+ */
 router.delete(
   "/bulk",
   authenticateUser,
@@ -74,15 +258,16 @@ router.delete(
   deleteProductsBulk
 );
 
-
-
 /**
  * @swagger
  * /api/products/{id}:
  *   get:
  *     summary: Retrieve a single product
+ *     description: Available to admin, manager, and viewer roles.
  *     tags:
  *       - Products
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -95,8 +280,14 @@ router.delete(
  *         description: Product retrieved successfully
  *       400:
  *         description: Invalid product ID
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       404:
  *         description: Product not found
+ *       500:
+ *         description: Could not retrieve product
  */
 router.get(
   "/:id",
@@ -105,15 +296,16 @@ router.get(
   getProductById
 );
 
-
-
 /**
  * @swagger
  * /api/products:
  *   post:
  *     summary: Create a new product
+ *     description: Available to admin and manager roles.
  *     tags:
  *       - Products
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -126,12 +318,16 @@ router.get(
  *             properties:
  *               sku:
  *                 type: string
+ *                 maxLength: 64
+ *                 pattern: '^[A-Z0-9_-]+$'
  *                 example: LAPTOP-001
  *               name:
  *                 type: string
+ *                 maxLength: 120
  *                 example: Dell Latitude 7450
  *               description:
  *                 type: string
+ *                 maxLength: 500
  *                 example: Business laptop
  *               unit:
  *                 type: string
@@ -146,6 +342,10 @@ router.get(
  *         description: Product created successfully
  *       400:
  *         description: Validation failed
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       409:
  *         description: Product with this SKU already exists
  *       500:
@@ -160,15 +360,16 @@ router.post(
   createProduct
 );
 
-
-
 /**
  * @swagger
  * /api/products/{id}:
  *   patch:
  *     summary: Update product information
+ *     description: At least one of sku, name, description, unit, or status is required. Available to admin and manager roles.
  *     tags:
  *       - Products
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -182,15 +383,20 @@ router.post(
  *         application/json:
  *           schema:
  *             type: object
+ *             minProperties: 1
  *             properties:
  *               sku:
  *                 type: string
+ *                 maxLength: 64
+ *                 pattern: '^[A-Z0-9_-]+$'
  *                 example: LAPTOP-002
  *               name:
  *                 type: string
+ *                 maxLength: 120
  *                 example: Updated Laptop
  *               description:
  *                 type: string
+ *                 maxLength: 500
  *                 example: Updated product description
  *               unit:
  *                 type: string
@@ -205,10 +411,16 @@ router.post(
  *         description: Product updated successfully
  *       400:
  *         description: Invalid product ID
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       404:
  *         description: Product not found
  *       409:
  *         description: Product with this SKU already exists
+ *       500:
+ *         description: Could not update product
  */
 router.patch(
   "/:id",
@@ -219,15 +431,16 @@ router.patch(
   updateProduct
 );
 
-
-
 /**
  * @swagger
  * /api/products/{id}/deactivate:
  *   patch:
  *     summary: Deactivate a product
+ *     description: Available to admin and manager roles.
  *     tags:
  *       - Products
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -240,8 +453,14 @@ router.patch(
  *         description: Product deactivated successfully
  *       400:
  *         description: Invalid product ID
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       404:
  *         description: Product not found
+ *       500:
+ *         description: Could not deactivate product
  */
 router.patch(
   "/:id/deactivate",
@@ -250,15 +469,16 @@ router.patch(
   deactivateProduct
 );
 
-
-
 /**
  * @swagger
  * /api/products/{id}:
  *   delete:
  *     summary: Delete an inactive product
+ *     description: Available to the admin role only.
  *     tags:
  *       - Products
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -271,10 +491,16 @@ router.patch(
  *         description: Product deleted successfully
  *       400:
  *         description: Invalid product ID
+ *       401:
+ *         description: Access token is missing or invalid
+ *       403:
+ *         description: User account is inactive or access is denied
  *       404:
  *         description: Product not found
  *       409:
  *         description: Active products must be deactivated before deletion
+ *       500:
+ *         description: Could not delete product
  */
 router.delete(
   "/:id",
@@ -282,6 +508,5 @@ router.delete(
   authorizeRoles("admin"),
   deleteProduct
 );
-
 
 module.exports = router;

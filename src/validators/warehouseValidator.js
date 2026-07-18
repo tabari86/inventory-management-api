@@ -2,18 +2,38 @@ const { body } = require("express-validator");
 
 const createWarehouseValidation = [
   body("code")
+    .notEmpty()
+    .withMessage("Warehouse code is required")
+    .bail()
+    .isString()
+    .withMessage("Warehouse code must be a string")
+    .bail()
     .trim()
     .notEmpty()
-    .withMessage("Warehouse code is required"),
+    .withMessage("Warehouse code is required")
+    .bail()
+    .customSanitizer((value) => value.toUpperCase())
+    .isLength({ max: 64 })
+    .withMessage("Warehouse code must be at most 64 characters long")
+    .matches(/^[A-Z0-9_-]+$/)
+    .withMessage("Warehouse code may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("name")
     .trim()
     .notEmpty()
-    .withMessage("Warehouse name is required"),
+    .withMessage("Warehouse name is required")
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Warehouse name must be at most 120 characters long"),
 
   body("description")
     .optional()
-    .trim(),
+    .isString()
+    .withMessage("Description must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("status")
     .optional()
@@ -47,14 +67,19 @@ const updateWarehouseValidation = [
     .optional()
     .trim()
     .notEmpty()
-    .withMessage("Warehouse name cannot be empty"),
+    .withMessage("Warehouse name cannot be empty")
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Warehouse name must be at most 120 characters long"),
 
   body("description")
     .optional()
     .isString()
     .withMessage("Description must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("status")
     .optional()
@@ -68,23 +93,38 @@ const createBulkWarehousesValidation = [
     .withMessage("Body must be an array containing between 1 and 150 warehouses"),
 
   body("*.code")
+    .notEmpty()
+    .withMessage("Warehouse code is required")
+    .bail()
+    .isString()
+    .withMessage("Warehouse code must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Warehouse code is required")
-    .bail(),
+    .bail()
+    .customSanitizer((value) => value.toUpperCase())
+    .isLength({ max: 64 })
+    .withMessage("Warehouse code must be at most 64 characters long")
+    .matches(/^[A-Z0-9_-]+$/)
+    .withMessage("Warehouse code may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("*.name")
     .trim()
     .notEmpty()
     .withMessage("Warehouse name is required")
-    .bail(),
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Warehouse name must be at most 120 characters long"),
 
   body("*.description")
     .optional()
     .isString()
     .withMessage("Description must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("*.status")
     .optional()
@@ -130,14 +170,18 @@ const updateBulkWarehousesValidation = [
     .trim()
     .notEmpty()
     .withMessage("Warehouse name cannot be empty")
-    .bail(),
+    .bail()
+    .isLength({ max: 120 })
+    .withMessage("Warehouse name must be at most 120 characters long"),
 
   body("*.description")
     .optional()
     .isString()
     .withMessage("Description must be a string")
     .bail()
-    .trim(),
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Description must be at most 500 characters long"),
 
   body("*.status")
     .optional()

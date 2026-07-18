@@ -302,4 +302,88 @@ describe("Product API", () => {
     expect(response.statusCode).toBe(400);
     expect((await Product.findById(product._id)).name).toBe("Original Bulk Name");
   });
+
+  it("rejects a non-string product description", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({
+        sku: "DESCRIPTION-001",
+        name: "Description Validation Product",
+        description: { text: "invalid" },
+      });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("normalizes a product SKU to uppercase on create", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ sku: "lowercase-001", name: "Normalized Product" });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.body.data.sku).toBe("LOWERCASE-001");
+  });
+
+  it("normalizes product SKUs to uppercase in bulk create", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/products/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        { sku: "bulk-lower-001", name: "Bulk Lower One" },
+        { sku: "bulk-lower-002", name: "Bulk Lower Two" },
+      ]);
+
+    expect(response.statusCode).toBe(201);
+    expect(response.body.data.products.map((product) => product.sku)).toEqual([
+      "BULK-LOWER-001",
+      "BULK-LOWER-002",
+    ]);
+  });
+
+  it("detects SKU conflicts regardless of letter case", async () => {
+    const managerToken = await createManagerToken();
+    await Product.create({
+      sku: "CASE-CONFLICT-001",
+      name: "Existing Case Product",
+    });
+
+    const response = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ sku: "case-conflict-001", name: "Duplicate Case Product" });
+
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("rejects a product SKU containing unsupported characters", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ sku: "INVALID SKU!", name: "Invalid SKU Product" });
+
+    expect(response.statusCode).toBe(400);
+    expect(await Product.countDocuments()).toBe(0);
+  });
+
+  it("rejects a product SKU longer than 64 characters", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ sku: "A".repeat(65), name: "Long SKU Product" });
+
+    expect(response.statusCode).toBe(400);
+    expect(await Product.countDocuments()).toBe(0);
+  });
 });

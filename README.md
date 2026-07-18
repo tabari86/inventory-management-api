@@ -70,8 +70,11 @@ Note: The service runs on Render's free plan, so the first request after inactiv
 - bcrypt
 - jsonwebtoken
 - express-validator
+- helmet
+- express-rate-limit
 - swagger-jsdoc
 - swagger-ui-express
+- @apidevtools/swagger-parser
 - Docker
 - Docker Compose
 - Jest
@@ -88,8 +91,10 @@ Note: The service runs on Render's free plan, so the first request after inactiv
 ### Authentication and User Management
 
 - JWT-based login
+- Login rate limiting for repeated failed login attempts
 - Refresh token workflow
 - Refresh token hashing and rotation
+- Older refresh tokens are revoked after a new successful login under normal operation
 - Logout with refresh token revocation
 - Current user endpoint
 - No public user registration
@@ -108,6 +113,20 @@ The API uses three roles:
 | `manager` | Can manage inventory data and inventory workflows         |
 | `viewer`  | Read-only access to inventory data                        |
 
+
+### Security and Operational Hardening
+
+- Helmet-based security headers
+- `X-Powered-By` header disabled
+- Public Swagger UI for portfolio/demo visibility
+- Protected API operations still require Bearer authentication
+- Required startup environment validation
+- Bounded MongoDB connection retry handling
+- Production 5xx responses hide internal error details
+- OpenAPI specification validation in the automated test suite
+- Static validation for Docker, Docker Compose, Render and CI configuration
+
+
 ### Inventory Management
 
 - Product management
@@ -115,6 +134,9 @@ The API uses three roles:
 - Stock records for product/warehouse combinations
 - Goods receipt workflow for increasing stock
 - Goods issue workflow for decreasing stock
+- Goods receipt and goods issue reject inactive stock records
+- Conditional stock updates to reduce normal overselling risk
+- Best-effort rollback if movement creation fails after a stock update
 - Read-only stock movement history
 - Bulk operations for products, warehouses, stocks and inventory workflows
 
@@ -255,7 +277,7 @@ The seed command is safe to run again. If an admin already exists, no new admin 
 {
   "name": "Warehouse Manager",
   "email": "manager@example.com",
-  "password": "Password123!",
+  "password": "ChangeMe_Strong_123!",
   "role": "manager"
 }
 ```
@@ -420,18 +442,22 @@ The seed command is safe to run again. If an admin already exists, no new admin 
 ### User and Authentication Rules
 
 - Public registration is not available.
-- The first admin user is created through `npm run seed:admin`.
-- The seed script does not create another admin if an admin already exists.
+- The first admin user is created through `npm run seed:admin` or the Docker Compose seed profile.
+- The seed script checks whether an admin already exists before creating one.
 - Admin users can create `manager` and `viewer` users.
 - API users cannot create another admin through `/api/users`.
 - Passwords are hashed before being stored.
 - Refresh tokens are stored as hashes in the database.
 - Refresh tokens are rotated when refreshing access tokens.
-- Logout revokes the current refresh token.
+- Older refresh tokens are revoked after a new successful login under normal operation.
+- Logout revokes the submitted refresh token.
+- Login requests are rate-limited after repeated failed attempts.
 
 ### Product Rules
 
 - Each product must have a unique SKU.
+- Product SKUs are normalized to uppercase.
+- Product SKUs use a restricted identifier format.
 - Each product must have a name.
 - Product unit is limited to predefined values.
 - New products are active by default.
@@ -451,7 +477,7 @@ meter
 ### Warehouse Rules
 
 - Each warehouse must have a unique code.
-- Warehouse codes are stored in uppercase.
+- Warehouse codes are stored in uppercase and use a restricted identifier format.
 - Warehouse codes are treated as business identifiers.
 - Warehouse codes cannot be changed through update endpoints.
 - Warehouses can be deactivated.
@@ -472,6 +498,9 @@ meter
 - Goods receipt creates a stock movement and increases current stock quantity.
 - Goods issue creates a stock movement and decreases current stock quantity.
 - Goods issue is rejected when available quantity is insufficient.
+- Goods receipt and goods issue are rejected for inactive stock records.
+- Goods issue uses conditional stock updates to reduce normal concurrent overselling risk.
+- Inventory workflows use best-effort rollback for stock updates if movement creation fails.
 - Stock movements are read-only history.
 - Manual stock movement creation is intentionally not exposed.
 
@@ -542,7 +571,11 @@ Authentication is handled through JWT access tokens and refresh tokens.
 
 Access tokens are used to protect private routes. Refresh tokens are stored as hashes in the database and can be revoked during logout or token rotation.
 
+The application also applies basic security hardening through Helmet, disables the `X-Powered-By` header and limits repeated failed login attempts.
+
 For automated testing, the Express application is separated from the server startup logic. `src/app.js` exports the Express app for tests, while `src/server.js` connects to the database and starts the HTTP server.
+
+Server startup validates required environment variables before the application starts. MongoDB connection handling includes bounded retry attempts before failing the process.
 
 ### Routes
 
@@ -568,6 +601,7 @@ This structure keeps the project understandable and avoids unnecessary complexit
 
 ---
 
+
 ## Environment Variables
 
 Use `.env.example` as a template for local configuration:
@@ -578,17 +612,22 @@ cp .env.example .env
 
 On Windows PowerShell:
 
-```powershell
+```bash
 Copy-Item .env.example .env
 ```
 
 Example values:
 
-```env
+```bash
 PORT=3000
 MONGODB_URI=mongodb://localhost:27017/inventory_management
 JWT_ACCESS_SECRET=change_this_access_token_secret
 JWT_ACCESS_EXPIRES_IN=15m
+
+DB_CONNECT_RETRIES=2
+DB_CONNECT_RETRY_DELAY_MS=1000
+
+SWAGGER_PRODUCTION_URL=https://inventory-management-api-6zuo.onrender.com
 
 ADMIN_NAME=Initial Admin
 ADMIN_EMAIL=admin@example.com
@@ -598,6 +637,30 @@ ADMIN_PASSWORD=change_this_admin_password
 The `.env` file is ignored by Git and should not be committed.
 
 For production deployments, use strong secret values and do not commit real credentials.
+
+---
+
+## Production and Data Notes
+
+This repository includes a short production data note in:
+
+```text
+docs/production-data-notes.md
+
+```
+
+Before using an existing production database, the following data-related checks should be reviewed:
+
+- existing mixed-case product SKUs
+- existing stock movement types
+- existing admin users
+- MongoDB unique indexes
+- legacy refresh token data
+- production secret rotation
+
+These checks are operational deployment tasks and are not executed automatically by the application.
+
+
 
 ---
 
@@ -667,11 +730,17 @@ Swagger documentation:
 http://localhost:3000/api-docs
 ```
 
+To create the initial admin user inside the Docker Compose setup, run the seed service:
+
+```bash
+docker compose --profile seed-admin run --rm seed-admin
+```
 Stop the containers:
 
 ```bash
 docker compose down
 ```
+The seed step is intentionally separated from normal application startup. It should be run only when an initial.
 
 If the admin user has not been created yet, run the seed command with the correct environment variables:
 
@@ -685,7 +754,7 @@ The seed step is not intended to run automatically on every application startup.
 
 ## Testing
 
-The project includes automated API tests with Jest, Supertest and mongodb-memory-server.
+The project includes automated API, integration and configuration tests with Jest, Supertest and mongodb-memory-server.
 
 The tests cover:
 
@@ -693,6 +762,8 @@ The tests cover:
 - authentication workflows
 - refresh token rotation
 - logout token revocation
+- login rate limiting
+- rejection of public registration
 - admin-only user creation
 - role-based access control
 - product API
@@ -703,7 +774,14 @@ The tests cover:
 - goods issue workflow
 - bulk operations
 - request validation
-- rejection of public registration
+- inactive stock rejection in inventory workflows
+- concurrent goods issue scenarios
+- production error handling behavior
+- MongoDB connection retry behavior
+- required server environment variables
+- public Swagger UI availability
+- OpenAPI specification validation
+- Docker, Docker Compose, Render and CI configuration checks
 - disabled manual stock movement creation
 
 Run tests:
@@ -770,6 +848,7 @@ inventory-management-api/
 |   |   |-- authMiddleware.js
 |   |   |-- roleMiddleware.js
 |   |   |-- validateRequest.js
+|   |   |-- loginRateLimiter.js
 |   |   `-- errorHandler.js
 |   |
 |   |-- models/
@@ -804,16 +883,22 @@ inventory-management-api/
 |   |
 |   |-- app.test.js
 |   |-- auth.test.js
-|   |-- user.test.js
+|   |-- database.test.js
+|   |-- deploymentConfig.test.js
+|   |-- errorHandler.test.js
+|   |-- inventoryWorkflow.test.js
 |   |-- product.test.js
-|   |-- warehouse.test.js
+|   |-- server.test.js
 |   |-- stock.test.js
 |   |-- stockMovement.test.js
-|   |-- inventoryWorkflow.test.js
+|   |-- swagger.test.js
+|   |-- user.test.js
+|   |-- warehouse.test.js
 |   `-- setupTestDb.js
 |
 |-- docs/
-|   `-- Swagger-UI.png
+|   |-- Swagger-UI.png
+|   `-- production-data-notes.md
 |
 |-- .env.example
 |-- .dockerignore
@@ -822,7 +907,8 @@ inventory-management-api/
 |-- docker-compose.yml
 |-- package.json
 |-- package-lock.json
-`-- README.md
+|-- README.md
+`-- render.yaml
 ```
 
 ---
@@ -839,6 +925,7 @@ Implemented:
 - JWT authentication
 - refresh token rotation
 - refresh token revocation
+- login rate limiting
 - role-based access control
 - protected inventory endpoints
 - product bulk operations
@@ -848,20 +935,28 @@ Implemented:
 - goods issue workflow
 - read-only stock movement history
 - request validation with express-validator
+- SKU and warehouse-code normalization rules
+- security headers with Helmet
+- production-safe 5xx error responses
+- MongoDB connection retry handling
 - global error handling
 - Swagger / OpenAPI documentation
+- formal OpenAPI validation in tests
 - Docker support
 - Docker Compose setup with MongoDB
-- automated API tests
-- GitHub Actions CI workflow
+- Docker Compose seed profile for initial admin creation
+- Render blueprint configuration
+- automated API and configuration tests
+- GitHub Actions CI workflow with Docker build step
 - deployment on Render
 - MongoDB Atlas production database connection
 
 Current focus:
 
-- production hardening
-- documentation consistency
-- operational improvements
+- production data verification
+- deployment verification after push
+- operational monitoring improvements
+- transaction support for inventory workflows when MongoDB replica set infrastructure is available
 
 ---
 
@@ -872,7 +967,12 @@ Possible future improvements:
 - request-level audit metadata
 - pagination and filtering for larger datasets
 - improved operational logging
-- more detailed Swagger schemas for bulk endpoints
+- production monitoring and alerting
+- deployment smoke checks after Render release
+- stronger admin recovery workflow
+- database-level enforcement for one active admin if required
+- migration scripts for existing production data
+- distributed rate limiting for multi-instance deployments
 - transaction support for inventory workflows when MongoDB replica set infrastructure is available
 
 ---
@@ -902,11 +1002,16 @@ Some design choices are intentional:
 
 - no public registration
 - no automatic admin creation on application startup
+- initial admin creation is an explicit setup step
 - no direct stock quantity updates
 - no manual stock movement creation
 - stock movement history is generated by inventory workflows
-- MongoDB transactions are not part of this version
+- goods receipt and goods issue reject inactive stock records
+- goods issue uses conditional stock updates to reduce normal overselling risk
+- inventory workflows use best-effort rollback, but full MongoDB transactions are not part of this version
+- login rate limiting is process-local and suitable for this single-instance demo setup
 - Swagger is public for portfolio/demo visibility, while protected endpoints still require authentication
+- production data compatibility notes are documented separately in `docs/production-data-notes.md`
 
 ---
 

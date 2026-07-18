@@ -3,6 +3,8 @@ const StockMovement = require("../models/StockMovement");
 const mongoose = require("mongoose");
 
 const createGoodsReceipt = async (req, res, next) => {
+  let stockWasIncremented = false;
+
   try {
     const { stockId, quantity, reference, reason } = req.body;
 
@@ -18,13 +20,27 @@ const createGoodsReceipt = async (req, res, next) => {
       });
     }
 
-    const stock = await Stock.findById(stockId);
+    const updatedStock = await Stock.findOneAndUpdate(
+      { _id: stockId, status: "active" },
+      { $inc: { quantity } },
+      { returnDocument: "after" }
+    );
 
-    if (!stock) {
+    if (!updatedStock) {
+      const stock = await Stock.findById(stockId);
+
+      if (stock) {
+        return res.status(409).json({
+          message: "Cannot receive goods into inactive stock",
+        });
+      }
+
       return res.status(404).json({
         message: "Stock record not found",
       });
     }
+
+    stockWasIncremented = true;
 
     const stockMovement = await StockMovement.create({
       stockId,
@@ -34,10 +50,6 @@ const createGoodsReceipt = async (req, res, next) => {
       reason,
     });
 
-    stock.quantity += quantity;
-
-    const updatedStock = await stock.save();
-
     return res.status(201).json({
       message: "Goods receipt completed successfully",
       data: {
@@ -46,6 +58,19 @@ const createGoodsReceipt = async (req, res, next) => {
       },
     });
   } catch (error) {
+    if (stockWasIncremented) {
+      try {
+        await Stock.updateOne(
+          { _id: req.body.stockId, quantity: { $gte: req.body.quantity } },
+          { $inc: { quantity: -req.body.quantity } }
+        );
+      } catch (rollbackError) {
+        console.error(
+          `Could not roll back goods receipt stock update: ${rollbackError.message}`
+        );
+      }
+    }
+
     error.message = "Could not complete goods receipt";
     next(error);
   }
@@ -74,8 +99,46 @@ const createGoodsReceiptsBulk = async (req, res, next) => {
       });
     }
 
+    if (stocks.some((stock) => stock.status !== "active")) {
+      return res.status(409).json({
+        message: "Cannot receive goods into inactive stock",
+      });
+    }
+
     for (const [stockId, quantity] of quantityByStockId) {
-      await Stock.updateOne({ _id: stockId }, { $inc: { quantity } });
+      const updatedStock = await Stock.findOneAndUpdate(
+        { _id: stockId, status: "active" },
+        { $inc: { quantity } },
+        { returnDocument: "after" }
+      );
+
+      if (!updatedStock) {
+        const rollbackResults = await Promise.allSettled(
+          updatedStockTotals.map((updated) =>
+            Stock.updateOne(
+              { _id: updated.stockId, quantity: { $gte: updated.quantity } },
+              { $inc: { quantity: -updated.quantity } }
+            )
+          )
+        );
+        rollbackResults
+          .filter((result) => result.status === "rejected")
+          .forEach((result) =>
+            console.error(
+              `Could not roll back partial goods receipt stock update: ${result.reason.message}`
+            )
+          );
+        updatedStockTotals.length = 0;
+
+        const stock = await Stock.findById(stockId);
+
+        return res.status(stock ? 409 : 404).json({
+          message: stock
+            ? "Cannot receive goods into inactive stock"
+            : "One or more stock records were not found",
+        });
+      }
+
       updatedStockTotals.push({ stockId, quantity });
     }
 
@@ -98,15 +161,31 @@ const createGoodsReceiptsBulk = async (req, res, next) => {
     });
   } catch (error) {
     if (createdMovementIds.length > 0) {
-      await StockMovement.deleteMany({ _id: { $in: createdMovementIds } });
+      try {
+        await StockMovement.deleteMany({ _id: { $in: createdMovementIds } });
+      } catch (rollbackError) {
+        console.error(
+          `Could not roll back goods receipt movements: ${rollbackError.message}`
+        );
+      }
     }
 
     if (updatedStockTotals.length > 0) {
-      await Promise.all(
+      const rollbackResults = await Promise.allSettled(
         updatedStockTotals.map(({ stockId, quantity }) =>
-          Stock.updateOne({ _id: stockId }, { $inc: { quantity: -quantity } })
+          Stock.updateOne(
+            { _id: stockId, quantity: { $gte: quantity } },
+            { $inc: { quantity: -quantity } }
+          )
         )
       );
+      rollbackResults
+        .filter((result) => result.status === "rejected")
+        .forEach((result) =>
+          console.error(
+            `Could not roll back goods receipt stock update: ${result.reason.message}`
+          )
+        );
     }
 
     error.message = "Could not complete goods receipts";

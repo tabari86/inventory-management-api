@@ -32,6 +32,10 @@ const createStock = (productId, warehouseId, quantity = 0) =>
   Stock.create({ productId, warehouseId, quantity });
 
 describe("Inventory Workflow API", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it("should receive goods and increase stock quantity", async () => {
     const accessToken = await registerAndLoginAdmin();
 
@@ -167,6 +171,10 @@ describe("Inventory Workflow API", () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.body.message).toBe("Not enough stock available");
+    expect((await Stock.findById(stock._id)).quantity).toBe(2);
+    expect(
+      await StockMovement.countDocuments({ type: "GOODS_ISSUE" })
+    ).toBe(0);
   });
 
   it("should reject goods issue without access token", async () => {
@@ -319,5 +327,267 @@ describe("Inventory Workflow API", () => {
 
     expect(receiptResponse.statusCode).toBe(401);
     expect(issueResponse.statusCode).toBe(401);
+  });
+
+  it.each([
+    ["/api/goods-receipts", "reference"],
+    ["/api/goods-receipts", "reason"],
+    ["/api/goods-issues", "reference"],
+    ["/api/goods-issues", "reason"],
+  ])("rejects a non-string %s %s field", async (path, field) => {
+    const managerToken = await createManagerToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 10);
+
+    const response = await request(app)
+      .post(path)
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({
+        stockId: stock._id.toString(),
+        quantity: 1,
+        [field]: { value: "invalid" },
+      });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it.each([
+    ["/api/goods-receipts", "reference", 101],
+    ["/api/goods-receipts", "reason", 501],
+    ["/api/goods-issues", "reference", 101],
+    ["/api/goods-issues", "reason", 501],
+  ])("rejects an overlong %s %s field", async (path, field, length) => {
+    const managerToken = await createManagerToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 10);
+
+    const response = await request(app)
+      .post(path)
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({
+        stockId: stock._id.toString(),
+        quantity: 1,
+        [field]: "X".repeat(length),
+      });
+
+    expect(response.statusCode).toBe(400);
+    expect((await Stock.findById(stock._id)).quantity).toBe(10);
+  });
+
+  it("rejects a single goods receipt for inactive stock", async () => {
+    const managerToken = await createManagerToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await Stock.create({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: 4,
+      status: "inactive",
+    });
+
+    const response = await request(app)
+      .post("/api/goods-receipts")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ stockId: stock._id.toString(), quantity: 3 });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body.message).toBe("Cannot receive goods into inactive stock");
+    expect((await Stock.findById(stock._id)).quantity).toBe(4);
+    expect(await StockMovement.countDocuments()).toBe(0);
+  });
+
+  it("rejects bulk goods receipts when a stock record is inactive", async () => {
+    const managerToken = await createManagerToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await Stock.create({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: 4,
+      status: "inactive",
+    });
+
+    const response = await request(app)
+      .post("/api/goods-receipts/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([{ stockId: stock._id.toString(), quantity: 3 }]);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body.message).toBe("Cannot receive goods into inactive stock");
+    expect((await Stock.findById(stock._id)).quantity).toBe(4);
+    expect(await StockMovement.countDocuments()).toBe(0);
+  });
+
+  it("rolls back a single receipt when movement creation fails", async () => {
+    const adminToken = await createAdminToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 5);
+    jest
+      .spyOn(StockMovement, "create")
+      .mockRejectedValueOnce(new Error("simulated movement failure"));
+
+    const response = await request(app)
+      .post("/api/goods-receipts")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ stockId: stock._id.toString(), quantity: 3 });
+
+    expect(response.statusCode).toBe(500);
+    expect((await Stock.findById(stock._id)).quantity).toBe(5);
+    expect(await StockMovement.countDocuments()).toBe(0);
+  });
+
+  it("rolls back a single issue when movement creation fails", async () => {
+    const adminToken = await createAdminToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 5);
+    jest
+      .spyOn(StockMovement, "create")
+      .mockRejectedValueOnce(new Error("simulated movement failure"));
+
+    const response = await request(app)
+      .post("/api/goods-issues")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ stockId: stock._id.toString(), quantity: 3 });
+
+    expect(response.statusCode).toBe(500);
+    expect((await Stock.findById(stock._id)).quantity).toBe(5);
+    expect(await StockMovement.countDocuments()).toBe(0);
+  });
+
+  it("rolls back bulk receipt quantities when movement insertion fails", async () => {
+    const adminToken = await createAdminToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 5);
+    jest
+      .spyOn(StockMovement, "insertMany")
+      .mockRejectedValueOnce(new Error("simulated bulk movement failure"));
+
+    const response = await request(app)
+      .post("/api/goods-receipts/bulk")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send([
+        { stockId: stock._id.toString(), quantity: 2 },
+        { stockId: stock._id.toString(), quantity: 3 },
+      ]);
+
+    expect(response.statusCode).toBe(500);
+    expect((await Stock.findById(stock._id)).quantity).toBe(5);
+    expect(await StockMovement.countDocuments()).toBe(0);
+  });
+
+  it("rolls back bulk issue quantities when movement insertion fails", async () => {
+    const adminToken = await createAdminToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 10);
+    jest
+      .spyOn(StockMovement, "insertMany")
+      .mockRejectedValueOnce(new Error("simulated bulk movement failure"));
+
+    const response = await request(app)
+      .post("/api/goods-issues/bulk")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send([
+        { stockId: stock._id.toString(), quantity: 2 },
+        { stockId: stock._id.toString(), quantity: 3 },
+      ]);
+
+    expect(response.statusCode).toBe(500);
+    expect((await Stock.findById(stock._id)).quantity).toBe(10);
+    expect(await StockMovement.countDocuments()).toBe(0);
+  });
+
+  it("prevents concurrent single goods issues from overselling", async () => {
+    const managerToken = await createManagerToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 5);
+    const authorization = `Bearer ${managerToken}`;
+
+    const responses = await Promise.all([
+      request(app)
+        .post("/api/goods-issues")
+        .set("Authorization", authorization)
+        .send({ stockId: stock._id.toString(), quantity: 4 }),
+      request(app)
+        .post("/api/goods-issues")
+        .set("Authorization", authorization)
+        .send({ stockId: stock._id.toString(), quantity: 4 }),
+    ]);
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([
+      201,
+      409,
+    ]);
+    expect((await Stock.findById(stock._id)).quantity).toBe(1);
+    expect(
+      await StockMovement.countDocuments({ type: "GOODS_ISSUE" })
+    ).toBe(1);
+  });
+
+  it("prevents concurrent bulk goods issues from overselling", async () => {
+    const managerToken = await createManagerToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 5);
+    const authorization = `Bearer ${managerToken}`;
+    const body = [{ stockId: stock._id.toString(), quantity: 4 }];
+
+    const responses = await Promise.all([
+      request(app)
+        .post("/api/goods-issues/bulk")
+        .set("Authorization", authorization)
+        .send(body),
+      request(app)
+        .post("/api/goods-issues/bulk")
+        .set("Authorization", authorization)
+        .send(body),
+    ]);
+
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([
+      201,
+      409,
+    ]);
+    expect((await Stock.findById(stock._id)).quantity).toBe(1);
+    expect(
+      await StockMovement.countDocuments({ type: "GOODS_ISSUE" })
+    ).toBe(1);
+  });
+
+  it("never exceeds stock under ten concurrent goods issue requests", async () => {
+    const managerToken = await createManagerToken();
+    const product = await createProduct();
+    const warehouse = await createWarehouse();
+    const stock = await createStock(product._id, warehouse._id, 5);
+    const authorization = `Bearer ${managerToken}`;
+
+    const responses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        request(app)
+          .post("/api/goods-issues")
+          .set("Authorization", authorization)
+          .send({ stockId: stock._id.toString(), quantity: 1 })
+      )
+    );
+    const successfulResponses = responses.filter(
+      (response) => response.statusCode === 201
+    );
+    const rejectedResponses = responses.filter(
+      (response) => response.statusCode === 409
+    );
+    const finalStock = await Stock.findById(stock._id);
+
+    expect(successfulResponses).toHaveLength(5);
+    expect(rejectedResponses).toHaveLength(5);
+    expect(finalStock.quantity).toBe(0);
+    expect(finalStock.quantity).toBeGreaterThanOrEqual(0);
+    expect(
+      await StockMovement.countDocuments({ type: "GOODS_ISSUE" })
+    ).toBe(successfulResponses.length);
   });
 });
