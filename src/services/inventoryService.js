@@ -4,6 +4,7 @@ const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
 const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
+const withTransaction = require("../utils/transaction");
 
 const createDomainError = (code, httpStatus, message) =>
   new DomainError({ code, httpStatus, message });
@@ -27,19 +28,17 @@ const validateSingleInventoryInput = ({ stockId, quantity }) => {
 };
 
 const createGoodsReceipt = async ({ stockId, quantity, reference, reason }) => {
-  let stockWasIncremented = false;
+  validateSingleInventoryInput({ stockId, quantity });
 
-  try {
-    validateSingleInventoryInput({ stockId, quantity });
-
+  return withTransaction(async (session) => {
     const updatedStock = await Stock.findOneAndUpdate(
       { _id: stockId, status: "active" },
       { $inc: { quantity } },
-      { returnDocument: "after" }
+      { returnDocument: "after", session }
     );
 
     if (!updatedStock) {
-      const stock = await Stock.findById(stockId);
+      const stock = await Stock.findById(stockId).session(session);
 
       if (stock) {
         throw createDomainError(
@@ -56,44 +55,30 @@ const createGoodsReceipt = async ({ stockId, quantity, reference, reason }) => {
       );
     }
 
-    stockWasIncremented = true;
-
-    const stockMovement = await StockMovement.create({
-      stockId,
-      type: "GOODS_RECEIPT",
-      quantity,
-      reference,
-      reason,
-    });
+    const [stockMovement] = await StockMovement.create(
+      [
+        {
+          stockId,
+          type: "GOODS_RECEIPT",
+          quantity,
+          reference,
+          reason,
+        },
+      ],
+      { session }
+    );
 
     return {
       stock: updatedStock,
       stockMovement,
     };
-  } catch (error) {
-    if (stockWasIncremented) {
-      try {
-        await Stock.updateOne(
-          { _id: stockId, quantity: { $gte: quantity } },
-          { $inc: { quantity: -quantity } }
-        );
-      } catch (rollbackError) {
-        console.error(
-          `Could not roll back goods receipt stock update: ${rollbackError.message}`
-        );
-      }
-    }
-
-    throw error;
-  }
+  });
 };
 
 const createGoodsIssue = async ({ stockId, quantity, reference, reason }) => {
-  let stockWasDecremented = false;
+  validateSingleInventoryInput({ stockId, quantity });
 
-  try {
-    validateSingleInventoryInput({ stockId, quantity });
-
+  return withTransaction(async (session) => {
     const updatedStock = await Stock.findOneAndUpdate(
       {
         _id: stockId,
@@ -101,11 +86,11 @@ const createGoodsIssue = async ({ stockId, quantity, reference, reason }) => {
         status: "active",
       },
       { $inc: { quantity: -quantity } },
-      { returnDocument: "after" }
+      { returnDocument: "after", session }
     );
 
     if (!updatedStock) {
-      const stock = await Stock.findById(stockId);
+      const stock = await Stock.findById(stockId).session(session);
 
       if (!stock) {
         throw createDomainError(
@@ -130,53 +115,39 @@ const createGoodsIssue = async ({ stockId, quantity, reference, reason }) => {
       );
     }
 
-    stockWasDecremented = true;
-
-    const stockMovement = await StockMovement.create({
-      stockId,
-      type: "GOODS_ISSUE",
-      quantity,
-      reference,
-      reason,
-    });
+    const [stockMovement] = await StockMovement.create(
+      [
+        {
+          stockId,
+          type: "GOODS_ISSUE",
+          quantity,
+          reference,
+          reason,
+        },
+      ],
+      { session }
+    );
 
     return {
       stock: updatedStock,
       stockMovement,
     };
-  } catch (error) {
-    if (stockWasDecremented) {
-      try {
-        await Stock.updateOne(
-          { _id: stockId },
-          { $inc: { quantity } }
-        );
-      } catch (rollbackError) {
-        console.error(
-          `Could not roll back goods issue stock update: ${rollbackError.message}`
-        );
-      }
-    }
-
-    throw error;
-  }
+  });
 };
 
 const createGoodsReceiptsBulk = async ({ receipts }) => {
-  const updatedStockTotals = [];
-  let createdMovementIds = [];
+  const quantityByStockId = new Map();
 
-  try {
-    const quantityByStockId = new Map();
+  for (const receipt of receipts) {
+    const stockId = receipt.stockId.toLowerCase();
+    const currentQuantity = quantityByStockId.get(stockId) || 0;
+    quantityByStockId.set(stockId, currentQuantity + receipt.quantity);
+  }
 
-    for (const receipt of receipts) {
-      const stockId = receipt.stockId.toLowerCase();
-      const currentQuantity = quantityByStockId.get(stockId) || 0;
-      quantityByStockId.set(stockId, currentQuantity + receipt.quantity);
-    }
+  const stockIds = [...quantityByStockId.keys()];
 
-    const stockIds = [...quantityByStockId.keys()];
-    const stocks = await Stock.find({ _id: { $in: stockIds } });
+  return withTransaction(async (session) => {
+    const stocks = await Stock.find({ _id: { $in: stockIds } }).session(session);
 
     if (stocks.length !== stockIds.length) {
       throw createDomainError(
@@ -198,28 +169,11 @@ const createGoodsReceiptsBulk = async ({ receipts }) => {
       const updatedStock = await Stock.findOneAndUpdate(
         { _id: stockId, status: "active" },
         { $inc: { quantity } },
-        { returnDocument: "after" }
+        { returnDocument: "after", session }
       );
 
       if (!updatedStock) {
-        const rollbackResults = await Promise.allSettled(
-          updatedStockTotals.map((updated) =>
-            Stock.updateOne(
-              { _id: updated.stockId, quantity: { $gte: updated.quantity } },
-              { $inc: { quantity: -updated.quantity } }
-            )
-          )
-        );
-        rollbackResults
-          .filter((result) => result.status === "rejected")
-          .forEach((result) =>
-            console.error(
-              `Could not roll back partial goods receipt stock update: ${result.reason.message}`
-            )
-          );
-        updatedStockTotals.length = 0;
-
-        const stock = await Stock.findById(stockId);
+        const stock = await Stock.findById(stockId).session(session);
 
         throw createDomainError(
           stock ? errorCodes.INACTIVE_STOCK : errorCodes.RESOURCE_NOT_FOUND,
@@ -229,76 +183,40 @@ const createGoodsReceiptsBulk = async ({ receipts }) => {
             : "One or more stock records were not found"
         );
       }
-
-      updatedStockTotals.push({ stockId, quantity });
     }
 
     const stockMovements = await StockMovement.insertMany(
       receipts.map((receipt) => ({
         ...receipt,
         type: "GOODS_RECEIPT",
-      }))
+      })),
+      { session }
     );
-    createdMovementIds = stockMovements.map((movement) => movement._id);
-    const updatedStocks = await Stock.find({ _id: { $in: stockIds } });
+    const updatedStocks = await Stock.find({ _id: { $in: stockIds } }).session(
+      session
+    );
 
     return {
       processedCount: stockMovements.length,
       stockMovements,
       updatedStocks,
     };
-  } catch (error) {
-    if (error instanceof DomainError) {
-      throw error;
-    }
-
-    if (createdMovementIds.length > 0) {
-      try {
-        await StockMovement.deleteMany({ _id: { $in: createdMovementIds } });
-      } catch (rollbackError) {
-        console.error(
-          `Could not roll back goods receipt movements: ${rollbackError.message}`
-        );
-      }
-    }
-
-    if (updatedStockTotals.length > 0) {
-      const rollbackResults = await Promise.allSettled(
-        updatedStockTotals.map(({ stockId, quantity }) =>
-          Stock.updateOne(
-            { _id: stockId, quantity: { $gte: quantity } },
-            { $inc: { quantity: -quantity } }
-          )
-        )
-      );
-      rollbackResults
-        .filter((result) => result.status === "rejected")
-        .forEach((result) =>
-          console.error(
-            `Could not roll back goods receipt stock update: ${result.reason.message}`
-          )
-        );
-    }
-
-    throw error;
-  }
+  });
 };
 
 const createGoodsIssuesBulk = async ({ issues }) => {
-  const updatedStockTotals = [];
-  let createdMovementIds = [];
+  const quantityByStockId = new Map();
 
-  try {
-    const quantityByStockId = new Map();
+  for (const issue of issues) {
+    const stockId = issue.stockId.toLowerCase();
+    const currentQuantity = quantityByStockId.get(stockId) || 0;
+    quantityByStockId.set(stockId, currentQuantity + issue.quantity);
+  }
 
-    for (const issue of issues) {
-      const stockId = issue.stockId.toLowerCase();
-      const currentQuantity = quantityByStockId.get(stockId) || 0;
-      quantityByStockId.set(stockId, currentQuantity + issue.quantity);
-    }
+  const stockIds = [...quantityByStockId.keys()];
 
-    const stockIds = [...quantityByStockId.keys()];
-    const stocks = await Stock.find({ _id: { $in: stockIds } });
+  return withTransaction(async (session) => {
+    const stocks = await Stock.find({ _id: { $in: stockIds } }).session(session);
 
     if (stocks.length !== stockIds.length) {
       throw createDomainError(
@@ -335,83 +253,35 @@ const createGoodsIssuesBulk = async ({ issues }) => {
       const updatedStock = await Stock.findOneAndUpdate(
         { _id: stockId, quantity: { $gte: quantity }, status: "active" },
         { $inc: { quantity: -quantity } },
-        { returnDocument: "after" }
+        { returnDocument: "after", session }
       );
 
       if (!updatedStock) {
-        const rollbackResults = await Promise.allSettled(
-          updatedStockTotals.map((updated) =>
-            Stock.updateOne(
-              { _id: updated.stockId },
-              { $inc: { quantity: updated.quantity } }
-            )
-          )
-        );
-        rollbackResults
-          .filter((result) => result.status === "rejected")
-          .forEach((result) =>
-            console.error(
-              `Could not roll back partial goods issue stock update: ${result.reason.message}`
-            )
-          );
-        updatedStockTotals.length = 0;
-
         throw createDomainError(
           errorCodes.INSUFFICIENT_STOCK,
           409,
           "Not enough stock available"
         );
       }
-
-      updatedStockTotals.push({ stockId, quantity });
     }
 
     const stockMovements = await StockMovement.insertMany(
       issues.map((issue) => ({
         ...issue,
         type: "GOODS_ISSUE",
-      }))
+      })),
+      { session }
     );
-    createdMovementIds = stockMovements.map((movement) => movement._id);
-    const updatedStocks = await Stock.find({ _id: { $in: stockIds } });
+    const updatedStocks = await Stock.find({ _id: { $in: stockIds } }).session(
+      session
+    );
 
     return {
       processedCount: stockMovements.length,
       stockMovements,
       updatedStocks,
     };
-  } catch (error) {
-    if (error instanceof DomainError) {
-      throw error;
-    }
-
-    if (createdMovementIds.length > 0) {
-      try {
-        await StockMovement.deleteMany({ _id: { $in: createdMovementIds } });
-      } catch (rollbackError) {
-        console.error(
-          `Could not roll back goods issue movements: ${rollbackError.message}`
-        );
-      }
-    }
-
-    if (updatedStockTotals.length > 0) {
-      const rollbackResults = await Promise.allSettled(
-        updatedStockTotals.map(({ stockId, quantity }) =>
-          Stock.updateOne({ _id: stockId }, { $inc: { quantity } })
-        )
-      );
-      rollbackResults
-        .filter((result) => result.status === "rejected")
-        .forEach((result) =>
-          console.error(
-            `Could not roll back goods issue stock update: ${result.reason.message}`
-          )
-        );
-    }
-
-    throw error;
-  }
+  });
 };
 
 module.exports = {

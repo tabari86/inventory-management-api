@@ -1,15 +1,22 @@
 const mongoose = require("mongoose");
-const { MongoMemoryServer } = require("mongodb-memory-server");
+const { MongoMemoryReplSet } = require("mongodb-memory-server");
 
-let mongoServer;
+let mongoReplSet;
+
+jest.setTimeout(30000);
 
 beforeAll(async () => {
   process.env.JWT_ACCESS_SECRET = "test_access_token_secret";
   process.env.JWT_ACCESS_EXPIRES_IN = "15m";
 
-  mongoServer = await MongoMemoryServer.create();
+  mongoReplSet = await MongoMemoryReplSet.create({
+    replSet: {
+      count: 1,
+      storageEngine: "wiredTiger",
+    },
+  });
 
-  const mongoUri = mongoServer.getUri();
+  const mongoUri = mongoReplSet.getUri();
 
   await mongoose.connect(mongoUri);
 });
@@ -26,7 +33,7 @@ afterAll(async () => {
   await mongoose.connection.dropDatabase();
   await mongoose.connection.close();
 
-  if (mongoServer) {
-    await mongoServer.stop();
+  if (mongoReplSet) {
+    await mongoReplSet.stop();
   }
 });

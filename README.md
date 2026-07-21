@@ -136,7 +136,7 @@ The API uses three roles:
 - Goods issue workflow for decreasing stock
 - Goods receipt and goods issue reject inactive stock records
 - Conditional stock updates to reduce normal overselling risk
-- Best-effort rollback if movement creation fails after a stock update
+- Transactional Stock and StockMovement persistence for inventory workflows
 - Read-only stock movement history
 - Bulk operations for products, warehouses, stocks and inventory workflows
 
@@ -500,7 +500,8 @@ meter
 - Goods issue is rejected when available quantity is insufficient.
 - Goods receipt and goods issue are rejected for inactive stock records.
 - Goods issue uses conditional stock updates to reduce normal concurrent overselling risk.
-- Inventory workflows use best-effort rollback for stock updates if movement creation fails.
+- Goods receipt and goods issue commit Stock and StockMovement changes atomically.
+- Bulk goods receipt and issue requests are all-or-nothing transactions.
 - Stock movements are read-only history.
 - Manual stock movement creation is intentionally not exposed.
 
@@ -562,6 +563,9 @@ Controllers
 Application Services
    |
    v
+Transaction Helper (Inventory Mutations)
+   |
+   v
 Models
    |
    v
@@ -601,7 +605,9 @@ The Inventory and Stock application services accept plain JavaScript inputs, app
 
 Typed domain errors represent expected service failures internally. The global error handler preserves the existing public status codes and message-only error responses.
 
-MongoDB transactions are not implemented yet. Inventory write services retain the existing best-effort compensation behavior; idempotency, audit/outbox persistence, lifecycle hardening, request/correlation context, and API versioning remain future work.
+Goods receipt and goods issue services use one MongoDB transaction per request. Stock changes and their StockMovement records commit together, and each bulk request is all-or-nothing. The previous manual compensation updates were removed.
+
+Transactions provide atomic database persistence, not retry-safe API requests or exactly-once execution. Idempotency, AuditEvent, OutboxEvent, Product/Warehouse lifecycle hardening, request/correlation IDs, and API versioning remain future work.
 
 ### Models
 
@@ -634,7 +640,7 @@ Example values:
 
 ```bash
 PORT=3000
-MONGODB_URI=mongodb://localhost:27017/inventory_management
+MONGODB_URI=mongodb://localhost:27017/inventory_management?replicaSet=rs0&directConnection=true
 JWT_ACCESS_SECRET=change_this_access_token_secret
 JWT_ACCESS_EXPIRES_IN=15m
 
@@ -726,6 +732,25 @@ Build and start the API together with MongoDB:
 docker compose up --build
 ```
 
+Compose runs MongoDB 8 as a single-node replica set named `rs0`. Its health
+check initializes the replica set when needed and waits for the node to become
+primary before starting the API. The API container connects through:
+
+```text
+mongodb://mongo:27017/inventory_management?replicaSet=rs0
+```
+
+When the application runs directly on the host against the Compose MongoDB,
+use:
+
+```text
+mongodb://localhost:27017/inventory_management?replicaSet=rs0&directConnection=true
+```
+
+The existing `mongo_data` volume remains mounted and is not deleted by this
+configuration. Do not use `docker compose down -v` when development data must
+be retained.
+
 The API will be available at:
 
 ```text
@@ -747,7 +772,7 @@ http://localhost:3000/api-docs
 To create the initial admin user inside the Docker Compose setup, run the seed service:
 
 ```bash
-docker compose --profile seed-admin run --rm seed-admin
+docker compose --profile seed run --rm seed-admin
 ```
 Stop the containers:
 
@@ -768,7 +793,7 @@ The seed step is not intended to run automatically on every application startup.
 
 ## Testing
 
-The project includes automated API, integration and configuration tests with Jest, Supertest and mongodb-memory-server.
+The project includes automated API, integration and configuration tests with Jest, Supertest and a transaction-capable `MongoMemoryReplSet`.
 
 The tests cover:
 
@@ -881,6 +906,9 @@ inventory-management-api/
 |   |   |-- inventoryService.js
 |   |   `-- stockService.js
 |   |
+|   |-- utils/
+|   |   `-- transaction.js
+|   |
 |   |-- routes/
 |   |   |-- authRoutes.js
 |   |   |-- userRoutes.js
@@ -916,6 +944,7 @@ inventory-management-api/
 |   |-- stockService.test.js
 |   |-- stockMovement.test.js
 |   |-- swagger.test.js
+|   |-- transaction.test.js
 |   |-- user.test.js
 |   |-- warehouse.test.js
 |   `-- setupTestDb.js
@@ -958,6 +987,8 @@ Implemented:
 - stock bulk setup
 - goods receipt workflow
 - goods issue workflow
+- atomic Goods Receipt and Goods Issue transactions
+- all-or-nothing bulk inventory mutations
 - read-only stock movement history
 - request validation with express-validator
 - SKU and warehouse-code normalization rules
@@ -969,6 +1000,7 @@ Implemented:
 - formal OpenAPI validation in tests
 - Docker support
 - Docker Compose setup with MongoDB
+- Docker Compose single-node MongoDB replica set
 - Docker Compose seed profile for initial admin creation
 - Render blueprint configuration
 - automated API and configuration tests
@@ -981,7 +1013,7 @@ Current focus:
 - production data verification
 - deployment verification after push
 - operational monitoring improvements
-- transaction support for inventory workflows when MongoDB replica set infrastructure is available
+- retry safety and idempotency for inventory requests
 
 ---
 
@@ -998,7 +1030,7 @@ Possible future improvements:
 - database-level enforcement for one active admin if required
 - migration scripts for existing production data
 - distributed rate limiting for multi-instance deployments
-- transaction support for inventory workflows when MongoDB replica set infrastructure is available
+- idempotency for safely retrying inventory requests
 
 ---
 
@@ -1033,7 +1065,7 @@ Some design choices are intentional:
 - stock movement history is generated by inventory workflows
 - goods receipt and goods issue reject inactive stock records
 - goods issue uses conditional stock updates to reduce normal overselling risk
-- inventory workflows use best-effort rollback, but full MongoDB transactions are not part of this version
+- inventory workflows use MongoDB transactions, but requests are not idempotent or exactly-once
 - login rate limiting is process-local and suitable for this single-instance demo setup
 - Swagger is public for portfolio/demo visibility, while protected endpoints still require authentication
 - production data compatibility notes are documented separately in `docs/production-data-notes.md`

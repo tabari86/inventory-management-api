@@ -94,6 +94,8 @@ Thin Controllers
   ↓
 Inventory or Stock Application Service
   ↓
+Transaction Helper for Inventory Mutations
+  ↓
 Mongoose Models
   ↓
 MongoDB
@@ -108,10 +110,21 @@ Expected business failures from these services use typed domain errors. The
 global error handler maps them to the existing status codes and message-only
 response bodies, so the public API contract remains unchanged.
 
-This boundary is structural only. MongoDB transactions are not yet implemented,
-and the current best-effort compensation remains in place. Idempotency,
-AuditEvent, OutboxEvent, lifecycle hardening, request/correlation context, and
-API versioning are also not implemented in this phase.
+Goods receipt and goods issue run through a reusable transaction helper. Each
+request uses one MongoDB session, and every authoritative Stock and
+StockMovement read or write is attached to that session. Stock changes and
+movement records therefore commit atomically. Bulk receipt and issue requests
+use one transaction for the complete request and are all-or-nothing. The former
+manual compensation updates and movement deletes are no longer used.
+
+Transactions require a replica-set or equivalent transaction-capable MongoDB
+topology. Tests use a single-node `MongoMemoryReplSet`, and local Docker Compose
+uses MongoDB 8 with the single-node replica set `rs0`.
+
+Transactions do not make requests idempotent or exactly-once. Idempotency,
+AuditEvent, OutboxEvent, Product/Warehouse lifecycle hardening, optimistic
+concurrency, request/correlation IDs, and API versioning are not implemented in
+this phase.
 
 ## Future Stock Design
 

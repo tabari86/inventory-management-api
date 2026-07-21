@@ -420,7 +420,7 @@ describe("Inventory Workflow API", () => {
     expect(await StockMovement.countDocuments()).toBe(0);
   });
 
-  it("rolls back a single receipt when movement creation fails", async () => {
+  it("aborts a single receipt when movement creation fails", async () => {
     const adminToken = await createAdminToken();
     const product = await createProduct();
     const warehouse = await createWarehouse();
@@ -439,7 +439,7 @@ describe("Inventory Workflow API", () => {
     expect(await StockMovement.countDocuments()).toBe(0);
   });
 
-  it("rolls back a single issue when movement creation fails", async () => {
+  it("aborts a single issue when movement creation fails", async () => {
     const adminToken = await createAdminToken();
     const product = await createProduct();
     const warehouse = await createWarehouse();
@@ -458,7 +458,7 @@ describe("Inventory Workflow API", () => {
     expect(await StockMovement.countDocuments()).toBe(0);
   });
 
-  it("rolls back bulk receipt quantities when movement insertion fails", async () => {
+  it("aborts bulk receipt quantities when movement insertion fails", async () => {
     const adminToken = await createAdminToken();
     const product = await createProduct();
     const warehouse = await createWarehouse();
@@ -480,7 +480,7 @@ describe("Inventory Workflow API", () => {
     expect(await StockMovement.countDocuments()).toBe(0);
   });
 
-  it("rolls back bulk issue quantities when movement insertion fails", async () => {
+  it("aborts bulk issue quantities when movement insertion fails", async () => {
     const adminToken = await createAdminToken();
     const product = await createProduct();
     const warehouse = await createWarehouse();

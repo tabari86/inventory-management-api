@@ -30,4 +30,13 @@ describe("Deployment configuration", () => {
     expect(compose).toContain("command: npm run seed:admin");
     expect(compose).toContain("condition: service_healthy");
   });
+
+  it("configures local MongoDB as a persistent single-node replica set", () => {
+    const compose = readRepositoryFile("docker-compose.yml");
+
+    expect(compose).toContain('command: ["mongod", "--replSet", "rs0"');
+    expect(compose).toContain("replicaSet=rs0");
+    expect(compose).toContain("rs.initiate");
+    expect(compose).toContain("mongo_data:/data/db");
+  });
 });
