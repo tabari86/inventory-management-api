@@ -550,10 +550,16 @@ Client
 Routes
    |
    v
+Authentication / RBAC
+   |
+   v
 Validation
    |
    v
 Controllers
+   |
+   v
+Application Services
    |
    v
 Models
@@ -587,7 +593,15 @@ Validation rules check request payloads before controller logic is executed.
 
 ### Controllers
 
-Controllers handle incoming requests, apply business rules and return HTTP responses.
+Controllers handle HTTP input and output. Goods receipt, goods issue, and Stock setup write controllers delegate their business behavior to application services.
+
+### Application Services
+
+The Inventory and Stock application services accept plain JavaScript inputs, apply the existing write rules, and use the Mongoose models. They do not depend on Express request or response objects.
+
+Typed domain errors represent expected service failures internally. The global error handler preserves the existing public status codes and message-only error responses.
+
+MongoDB transactions are not implemented yet. Inventory write services retain the existing best-effort compensation behavior; idempotency, audit/outbox persistence, lifecycle hardening, request/correlation context, and API versioning remain future work.
 
 ### Models
 
@@ -834,6 +848,10 @@ inventory-management-api/
 |   |   |-- database.js
 |   |   `-- swagger.js
 |   |
+|   |-- errors/
+|   |   |-- DomainError.js
+|   |   `-- errorCodes.js
+|   |
 |   |-- controllers/
 |   |   |-- authController.js
 |   |   |-- userController.js
@@ -858,6 +876,10 @@ inventory-management-api/
 |   |   |-- Warehouse.js
 |   |   |-- Stock.js
 |   |   `-- StockMovement.js
+|   |
+|   |-- services/
+|   |   |-- inventoryService.js
+|   |   `-- stockService.js
 |   |
 |   |-- routes/
 |   |   |-- authRoutes.js
@@ -886,10 +908,12 @@ inventory-management-api/
 |   |-- database.test.js
 |   |-- deploymentConfig.test.js
 |   |-- errorHandler.test.js
+|   |-- inventoryService.test.js
 |   |-- inventoryWorkflow.test.js
 |   |-- product.test.js
 |   |-- server.test.js
 |   |-- stock.test.js
+|   |-- stockService.test.js
 |   |-- stockMovement.test.js
 |   |-- swagger.test.js
 |   |-- user.test.js
@@ -898,6 +922,7 @@ inventory-management-api/
 |
 |-- docs/
 |   |-- Swagger-UI.png
+|   |-- architecture.md
 |   `-- production-data-notes.md
 |
 |-- .env.example

@@ -86,16 +86,32 @@ This keeps warehouse references stable for future stock records, reports and int
 ```text
 Routes
   ↓
-Controllers
+Authentication / RBAC
   ↓
-Models
+Validators
   ↓
-Database
+Thin Controllers
+  ↓
+Inventory or Stock Application Service
+  ↓
+Mongoose Models
+  ↓
+MongoDB
 ```
 
-The current structure is intentionally simple.
+Goods receipt, goods issue, and Stock setup writes use application services that
+accept plain JavaScript input and do not depend on Express request or response
+objects. Their controllers translate HTTP input and output only. Existing Stock
+read operations remain in the Stock controller.
 
-A separate service layer may be added later when stock operations and movement logic become more complex.
+Expected business failures from these services use typed domain errors. The
+global error handler maps them to the existing status codes and message-only
+response bodies, so the public API contract remains unchanged.
+
+This boundary is structural only. MongoDB transactions are not yet implemented,
+and the current best-effort compensation remains in place. Idempotency,
+AuditEvent, OutboxEvent, lifecycle hardening, request/correlation context, and
+API versioning are also not implemented in this phase.
 
 ## Future Stock Design
 

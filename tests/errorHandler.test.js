@@ -1,3 +1,5 @@
+const DomainError = require("../src/errors/DomainError");
+const errorCodes = require("../src/errors/errorCodes");
 const errorHandler = require("../src/middleware/errorHandler");
 
 describe("Global error handler", () => {
@@ -52,4 +54,43 @@ describe("Global error handler", () => {
       });
     }
   );
+
+  it("preserves typed DomainError fields and native cause internally", () => {
+    const cause = new Error("internal database detail");
+    const error = new DomainError({
+      code: errorCodes.INSUFFICIENT_STOCK,
+      httpStatus: 409,
+      message: "Not enough stock available",
+      retryable: true,
+      cause,
+    });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("DomainError");
+    expect(error.code).toBe(errorCodes.INSUFFICIENT_STOCK);
+    expect(error.httpStatus).toBe(409);
+    expect(error.retryable).toBe(true);
+    expect(error.cause).toBe(cause);
+  });
+
+  it("maps DomainError without exposing typed fields or its cause", () => {
+    process.env.NODE_ENV = "test";
+    const response = createResponse();
+    const error = new DomainError({
+      code: errorCodes.RESOURCE_NOT_FOUND,
+      httpStatus: 404,
+      message: "Stock record not found",
+      cause: new Error("internal database detail"),
+    });
+
+    errorHandler(error, {}, response, jest.fn());
+
+    expect(response.status).toHaveBeenCalledWith(404);
+    expect(response.json).toHaveBeenCalledWith({
+      message: "Stock record not found",
+    });
+    expect(response.json.mock.calls[0][0]).not.toHaveProperty("code");
+    expect(response.json.mock.calls[0][0]).not.toHaveProperty("retryable");
+    expect(response.json.mock.calls[0][0]).not.toHaveProperty("cause");
+  });
 });
