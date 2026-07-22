@@ -208,7 +208,68 @@ describe("Swagger/OpenAPI specification", () => {
 
     expect(productSchema.minProperties).toBe(1);
     expect(warehouseSchema.minProperties).toBe(1);
+    expect(productSchema.properties.expectedVersion).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
+    expect(warehouseSchema.properties.expectedVersion).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
     expect(warehouseSchema.properties.code).toBeUndefined();
+  });
+
+  it("marks legacy Product DELETE operations as deprecated archive aliases", () => {
+    expect(swaggerSpec.paths["/api/products/{id}"].delete.deprecated).toBe(true);
+    expect(swaggerSpec.paths["/api/products/bulk"].delete.deprecated).toBe(true);
+    expect(
+      swaggerSpec.paths["/api/products/{id}"].delete.description
+    ).toContain("retains the Product");
+  });
+
+  it("documents Product create and update conflicts on the correct operations", () => {
+    const createConflict =
+      swaggerSpec.paths["/api/products"].post.responses["409"].description;
+    const updateConflict =
+      swaggerSpec.paths["/api/products/{id}"].patch.responses["409"].description;
+
+    expect(createConflict).toBe("Product with this SKU already exists");
+    expect(createConflict).toContain("SKU");
+    expect(createConflict.toLowerCase()).not.toContain("stale");
+    expect(createConflict).not.toContain("version");
+    expect(updateConflict).toBe(
+      "Product with this SKU already exists or the expected version is stale"
+    );
+    expect(updateConflict).toContain("SKU");
+    expect(updateConflict.toLowerCase()).toContain("stale");
+  });
+
+  it("documents aggregate versions, lifecycle guards, and movement history fields", () => {
+    const { Product, Warehouse, Stock, StockMovement } =
+      swaggerSpec.components.schemas;
+
+    expect(Product.properties.version).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      readOnly: true,
+    });
+    expect(Warehouse.properties.deactivatedAt.readOnly).toBe(true);
+    expect(Stock.properties.productLifecycleStatus).toMatchObject({
+      readOnly: true,
+      enum: ["active", "inactive", "archived"],
+    });
+    expect(Stock.properties.warehouseLifecycleStatus.readOnly).toBe(true);
+    expect(StockMovement.properties).toEqual(
+      expect.objectContaining({
+        productId: expect.any(Object),
+        warehouseId: expect.any(Object),
+        quantityBefore: expect.any(Object),
+        quantityAfter: expect.any(Object),
+        aggregateVersion: expect.any(Object),
+        productSnapshot: expect.any(Object),
+        warehouseSnapshot: expect.any(Object),
+      })
+    );
   });
 
   it.each([

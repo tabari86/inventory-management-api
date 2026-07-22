@@ -418,7 +418,12 @@ describe("Inventory application service", () => {
 
     expect(movementAttempts).toBe(2);
     expect(result.stock.quantity).toBe(14);
-    expect((await Stock.findById(stock._id)).quantity).toBe(14);
+    expect(result.stock.version).toBe(2);
+    expect(result.stockMovement.aggregateVersion).toBe(2);
+    expect(await Stock.findById(stock._id)).toMatchObject({
+      quantity: 14,
+      version: 2,
+    });
     expect(await StockMovement.countDocuments()).toBe(1);
   });
 

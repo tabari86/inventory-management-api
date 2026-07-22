@@ -91,7 +91,7 @@ router.get(
  *       404:
  *         description: One or more products or warehouses were not found
  *       409:
- *         description: A stock record already exists or a product or warehouse is inactive
+ *         description: A stock record already exists, a parent is inactive/archived, or a parent version conflicts
  *       500:
  *         description: Could not create stock records
  */
@@ -180,7 +180,7 @@ router.get(
  *       404:
  *         description: Product or warehouse not found
  *       409:
- *         description: Stock record already exists or product/warehouse is inactive
+ *         description: Stock record already exists, a parent is inactive/archived, or a parent version conflicts
  *       500:
  *         description: Could not create stock record
  */

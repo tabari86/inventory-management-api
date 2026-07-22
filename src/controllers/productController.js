@@ -1,5 +1,6 @@
 const Product = require("../models/Product");
 const mongoose = require("mongoose");
+const productService = require("../services/productService");
 
 const createProduct = async (req, res, next) => {
   try {
@@ -39,7 +40,15 @@ const createProduct = async (req, res, next) => {
 
 const createProductsBulk = async (req, res, next) => {
   try {
-    const productsToCreate = req.body;
+    const productsToCreate = req.body.map(
+      ({ sku, name, description, unit, status }) => ({
+        sku,
+        name,
+        description,
+        unit,
+        status,
+      })
+    );
     const skus = productsToCreate.map((product) => product.sku);
 
     if (new Set(skus).size !== skus.length) {
@@ -79,135 +88,64 @@ const createProductsBulk = async (req, res, next) => {
 
 const updateProductsBulk = async (req, res, next) => {
   try {
-    const updates = req.body;
-    const ids = updates.map((product) => product.id);
-
-    if (new Set(ids).size !== ids.length) {
-      return res.status(400).json({
-        message: "Duplicate product IDs are not allowed in the same request",
-      });
-    }
-
-    const products = await Product.find({ _id: { $in: ids } });
-
-    if (products.length !== ids.length) {
-      return res.status(404).json({
-        message: "One or more products were not found",
-      });
-    }
-
-    const skuUpdates = updates.filter((product) => product.sku !== undefined);
-    const updatedSkus = skuUpdates.map((product) => product.sku);
-
-    if (new Set(updatedSkus).size !== updatedSkus.length) {
-      return res.status(400).json({
-        message: "Duplicate SKUs are not allowed in the same request",
-      });
-    }
-
-    if (updatedSkus.length > 0) {
-      const productsWithUpdatedSkus = await Product.find({
-        sku: { $in: updatedSkus },
-      }).select("_id sku");
-      const skuOwnerBySku = new Map(
-        skuUpdates.map((product) => [product.sku, product.id])
-      );
-      const hasConflict = productsWithUpdatedSkus.some(
-        (product) => skuOwnerBySku.get(product.sku) !== product._id.toString()
-      );
-
-      if (hasConflict) {
-        return res.status(409).json({
-          message: "One or more product SKUs already exist",
-        });
-      }
-    }
-
-    const updatableFields = ["sku", "name", "description", "unit", "status"];
-    const operations = updates.map(({ id, ...update }) => {
-      const fieldsToUpdate = {};
-
-      for (const field of updatableFields) {
-        if (Object.prototype.hasOwnProperty.call(update, field)) {
-          fieldsToUpdate[field] = update[field];
-        }
-      }
-
-      return {
-        updateOne: {
-          filter: { _id: id },
-          update: { $set: fieldsToUpdate },
-        },
-      };
-    });
-
-    await Product.bulkWrite(operations);
-
-    const updatedProducts = await Product.find({ _id: { $in: ids } });
-    const productById = new Map(
-      updatedProducts.map((product) => [product._id.toString(), product])
+    const updates = req.body.map(
+      ({
+        id,
+        sku,
+        name,
+        description,
+        unit,
+        status,
+        expectedVersion,
+        deactivationReason,
+      }) => ({
+        id,
+        sku,
+        name,
+        description,
+        unit,
+        status,
+        expectedVersion,
+        deactivationReason,
+      })
     );
+    const data = await productService.updateProductsBulk({
+      updates,
+      actorId: req.user.id,
+    });
 
     return res.status(200).json({
       message: "Products updated successfully",
-      data: {
-        updatedCount: updatedProducts.length,
-        products: ids.map((id) => productById.get(id)),
-      },
+      data,
     });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({
-        message: "One or more product SKUs already exist",
-      });
-    }
-
-    error.message = "Could not update products";
+    error.clientMessage = "Could not update products";
     next(error);
   }
 };
 
 const deleteProductsBulk = async (req, res, next) => {
   try {
-    const { ids } = req.body;
-
-    if (new Set(ids).size !== ids.length) {
-      return res.status(400).json({
-        message: "Duplicate product IDs are not allowed in the same request",
-      });
-    }
-
-    const products = await Product.find({ _id: { $in: ids } });
-
-    if (products.length !== ids.length) {
-      return res.status(404).json({
-        message: "One or more products were not found",
-      });
-    }
-
-    if (products.some((product) => product.status === "active")) {
-      return res.status(409).json({
-        message: "Active products must be deactivated before deletion",
-      });
-    }
-
-    const result = await Product.deleteMany({ _id: { $in: ids } });
+    const data = await productService.archiveProductsBulk({
+      ids: req.body.ids,
+      actorId: req.user.id,
+    });
 
     return res.status(200).json({
       message: "Products deleted successfully",
-      data: {
-        deletedCount: result.deletedCount,
-      },
+      data,
     });
   } catch (error) {
-    error.message = "Could not delete products";
+    error.clientMessage = "Could not delete products";
     next(error);
   }
 };
 
 const getProducts = async (req, res, next) => {
   try {
-    const products = await Product.find().sort({ createdAt: -1 });
+    const products = await Product.find({ archivedAt: null }).sort({
+      createdAt: -1,
+    });
 
     return res.status(200).json({
       message: "Products retrieved successfully",
@@ -229,7 +167,7 @@ const getProductById = async (req, res, next) => {
       });
     }
 
-    const product = await Product.findById(id);
+    const product = await Product.findOne({ _id: id, archivedAt: null });
 
     if (!product) {
       return res.status(404).json({
@@ -250,114 +188,74 @@ const getProductById = async (req, res, next) => {
 const updateProduct = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { sku, name, description, unit, status } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid product ID",
-      });
-    }
-
-    const product = await Product.findById(id);
-
-    if (!product) {
-      return res.status(404).json({
-        message: "Product not found",
-      });
-    }
-
-    if (sku && sku !== product.sku) {
-      const existingProduct = await Product.findOne({ sku });
-
-      if (existingProduct) {
-        return res.status(409).json({
-          message: "A product with this SKU already exists",
-        });
-      }
-
-      product.sku = sku;
-    }
-
-    if (name !== undefined) product.name = name;
-    if (description !== undefined) product.description = description;
-    if (unit !== undefined) product.unit = unit;
-    if (status !== undefined) product.status = status;
-
-    const updatedProduct = await product.save();
+    const {
+      sku,
+      name,
+      description,
+      unit,
+      status,
+      expectedVersion,
+      deactivationReason,
+    } = req.body;
+    const updatedProduct = await productService.updateProduct({
+      productId: id,
+      actorId: req.user.id,
+      update: {
+        sku,
+        name,
+        description,
+        unit,
+        status,
+        expectedVersion,
+        deactivationReason,
+      },
+    });
 
     return res.status(200).json({
       message: "Product updated successfully",
       data: updatedProduct,
     });
   } catch (error) {
-    error.message = "Could not update product";
+    error.clientMessage = "Could not update product";
     next(error);
   }
 };
 
 const deactivateProduct = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid product ID",
-      });
-    }
-
-    const product = await Product.findById(id);
-
-    if (!product) {
-      return res.status(404).json({
-        message: "Product not found",
-      });
-    }
-
-    product.status = "inactive";
-
-    const updatedProduct = await product.save();
+    const body = req.body || {};
+    const updatedProduct = await productService.deactivateProduct({
+      productId: req.params.id,
+      actorId: req.user.id,
+      expectedVersion: body.expectedVersion,
+      deactivationReason: body.deactivationReason,
+    });
 
     return res.status(200).json({
       message: "Product deactivated successfully",
       data: updatedProduct,
     });
   } catch (error) {
-    error.message = "Could not deactivate product";
+    error.clientMessage = "Could not deactivate product";
     next(error);
   }
 };
 
 const deleteProduct = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid product ID",
-      });
-    }
-
-    const product = await Product.findById(id);
-
-    if (!product) {
-      return res.status(404).json({
-        message: "Product not found",
-      });
-    }
-
-    if (product.status === "active") {
-      return res.status(409).json({
-        message: "Active products must be deactivated before deletion",
-      });
-    }
-
-    await product.deleteOne();
+    const body = req.body || {};
+    await productService.archiveProduct({
+      productId: req.params.id,
+      actorId: req.user.id,
+      expectedVersion: body.expectedVersion,
+      archiveReason: body.archiveReason,
+    });
 
     return res.status(200).json({
       message: "Product deleted successfully",
     });
   } catch (error) {
-    error.message = "Could not delete product";
+    error.clientMessage = "Could not delete product";
     next(error);
   }
 };

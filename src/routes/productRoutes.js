@@ -5,6 +5,8 @@ const {
   createBulkProductsValidation,
   updateBulkProductsValidation,
   deleteBulkProductsValidation,
+  deactivateProductValidation,
+  archiveProductValidation,
 } = require("../validators/productValidator");
 
 const validateRequest = require("../middleware/validateRequest");
@@ -172,6 +174,13 @@ router.post(
  *                   type: string
  *                   enum: [active, inactive]
  *                   example: inactive
+ *                 expectedVersion:
+ *                   type: integer
+ *                   minimum: 1
+ *                   description: Optional transitional optimistic-concurrency precondition
+ *                 deactivationReason:
+ *                   type: string
+ *                   maxLength: 500
  *     responses:
  *       200:
  *         description: Products updated successfully; response data includes updatedCount and products
@@ -188,7 +197,7 @@ router.post(
  *       404:
  *         description: One or more products were not found
  *       409:
- *         description: One or more product SKUs already exist
+ *         description: One or more product SKUs already exist or an expected version is stale
  *       500:
  *         description: Could not update products
  */
@@ -205,8 +214,9 @@ router.patch(
  * @swagger
  * /api/products/bulk:
  *   delete:
- *     summary: Delete multiple inactive products
- *     description: Deletes between 1 and 150 inactive products. Available to the admin role only.
+ *     summary: Archive multiple inactive products (legacy DELETE)
+ *     description: Atomically archives between 1 and 150 inactive products without removing documents or references. deletedCount remains a compatibility field. Available to the admin role only.
+ *     deprecated: true
  *     tags:
  *       - Products
  *     security:
@@ -406,6 +416,13 @@ router.post(
  *                 type: string
  *                 enum: [active, inactive]
  *                 example: active
+ *               expectedVersion:
+ *                 type: integer
+ *                 minimum: 1
+ *                 description: Optional transitional optimistic-concurrency precondition
+ *               deactivationReason:
+ *                 type: string
+ *                 maxLength: 500
  *     responses:
  *       200:
  *         description: Product updated successfully
@@ -418,7 +435,7 @@ router.post(
  *       404:
  *         description: Product not found
  *       409:
- *         description: Product with this SKU already exists
+ *         description: Product with this SKU already exists or the expected version is stale
  *       500:
  *         description: Could not update product
  */
@@ -436,7 +453,7 @@ router.patch(
  * /api/products/{id}/deactivate:
  *   patch:
  *     summary: Deactivate a product
- *     description: Available to admin and manager roles.
+ *     description: Deactivates the Product and propagates its Stock lifecycle guards atomically. Repeating an already-applied transition is a no-op. Available to admin and manager roles.
  *     tags:
  *       - Products
  *     security:
@@ -448,6 +465,19 @@ router.patch(
  *         schema:
  *           type: string
  *         description: Product ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               expectedVersion:
+ *                 type: integer
+ *                 minimum: 1
+ *               deactivationReason:
+ *                 type: string
+ *                 maxLength: 500
  *     responses:
  *       200:
  *         description: Product deactivated successfully
@@ -459,6 +489,8 @@ router.patch(
  *         description: User account is inactive or access is denied
  *       404:
  *         description: Product not found
+ *       409:
+ *         description: Expected version is stale
  *       500:
  *         description: Could not deactivate product
  */
@@ -466,6 +498,8 @@ router.patch(
   "/:id/deactivate",
   authenticateUser,
   authorizeRoles("admin", "manager"),
+  deactivateProductValidation,
+  validateRequest,
   deactivateProduct
 );
 
@@ -473,8 +507,9 @@ router.patch(
  * @swagger
  * /api/products/{id}:
  *   delete:
- *     summary: Delete an inactive product
- *     description: Available to the admin role only.
+ *     summary: Archive an inactive product (legacy DELETE)
+ *     description: Compatibility alias that retains the Product and all references, marks it archived, and hides it from normal Product reads. Available to the admin role only.
+ *     deprecated: true
  *     tags:
  *       - Products
  *     security:
@@ -486,6 +521,19 @@ router.patch(
  *         schema:
  *           type: string
  *         description: Product ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               expectedVersion:
+ *                 type: integer
+ *                 minimum: 1
+ *               archiveReason:
+ *                 type: string
+ *                 maxLength: 500
  *     responses:
  *       200:
  *         description: Product deleted successfully
@@ -498,7 +546,7 @@ router.patch(
  *       404:
  *         description: Product not found
  *       409:
- *         description: Active products must be deactivated before deletion
+ *         description: Active products must be deactivated before archive or the expected version is stale
  *       500:
  *         description: Could not delete product
  */
@@ -506,6 +554,8 @@ router.delete(
   "/:id",
   authenticateUser,
   authorizeRoles("admin"),
+  archiveProductValidation,
+  validateRequest,
   deleteProduct
 );
 

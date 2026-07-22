@@ -4,6 +4,7 @@ const {
   updateWarehouseValidation,
   createBulkWarehousesValidation,
   updateBulkWarehousesValidation,
+  deactivateWarehouseValidation,
 } = require("../validators/warehouseValidator");
 
 const validateRequest = require("../middleware/validateRequest");
@@ -156,6 +157,13 @@ router.post(
  *                   type: string
  *                   enum: [active, inactive]
  *                   example: inactive
+ *                 expectedVersion:
+ *                   type: integer
+ *                   minimum: 1
+ *                   description: Optional transitional optimistic-concurrency precondition
+ *                 deactivationReason:
+ *                   type: string
+ *                   maxLength: 500
  *     responses:
  *       200:
  *         description: Warehouses updated successfully; response data includes updatedCount and warehouses
@@ -171,6 +179,8 @@ router.post(
  *         description: User account is inactive or access is denied
  *       404:
  *         description: One or more warehouses were not found
+ *       409:
+ *         description: An expected version is stale
  *       500:
  *         description: Could not update warehouses
  */
@@ -318,6 +328,13 @@ router.post(
  *                 type: string
  *                 enum: [active, inactive]
  *                 example: active
+ *               expectedVersion:
+ *                 type: integer
+ *                 minimum: 1
+ *                 description: Optional transitional optimistic-concurrency precondition
+ *               deactivationReason:
+ *                 type: string
+ *                 maxLength: 500
  *     responses:
  *       200:
  *         description: Warehouse updated successfully
@@ -329,6 +346,8 @@ router.post(
  *         description: User account is inactive or access is denied
  *       404:
  *         description: Warehouse not found
+ *       409:
+ *         description: Expected version is stale
  *       500:
  *         description: Could not update warehouse
  */
@@ -346,7 +365,7 @@ router.patch(
  * /api/warehouses/{id}/deactivate:
  *   patch:
  *     summary: Deactivate a warehouse
- *     description: Available to admin and manager roles.
+ *     description: Deactivates the Warehouse and propagates its Stock lifecycle guards atomically. Repeating an already-applied transition is a no-op. Available to admin and manager roles.
  *     tags:
  *       - Warehouses
  *     security:
@@ -358,6 +377,19 @@ router.patch(
  *         schema:
  *           type: string
  *         description: Warehouse ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               expectedVersion:
+ *                 type: integer
+ *                 minimum: 1
+ *               deactivationReason:
+ *                 type: string
+ *                 maxLength: 500
  *     responses:
  *       200:
  *         description: Warehouse deactivated successfully
@@ -369,6 +401,8 @@ router.patch(
  *         description: User account is inactive or access is denied
  *       404:
  *         description: Warehouse not found
+ *       409:
+ *         description: Expected version is stale
  *       500:
  *         description: Could not deactivate warehouse
  */
@@ -376,6 +410,8 @@ router.patch(
   "/:id/deactivate",
   authenticateUser,
   authorizeRoles("admin", "manager"),
+  deactivateWarehouseValidation,
+  validateRequest,
   deactivateWarehouse
 );
 

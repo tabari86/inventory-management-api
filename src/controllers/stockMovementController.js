@@ -5,12 +5,14 @@ const StockMovement = require("../models/StockMovement");
 const getStockMovements = async (req, res, next) => {
   try {
     const stockMovements = await StockMovement.find()
+      .populate("productId", "sku name unit status archivedAt")
+      .populate("warehouseId", "code name status")
       .populate({
         path: "stockId",
         populate: [
           {
             path: "productId",
-            select: "sku name unit status",
+            select: "sku name unit status archivedAt",
           },
           {
             path: "warehouseId",
@@ -40,19 +42,22 @@ const getStockMovementById = async (req, res, next) => {
       });
     }
 
-    const stockMovement = await StockMovement.findById(id).populate({
-      path: "stockId",
-      populate: [
-        {
-          path: "productId",
-          select: "sku name unit status",
-        },
-        {
-          path: "warehouseId",
-          select: "code name status",
-        },
-      ],
-    });
+    const stockMovement = await StockMovement.findById(id)
+      .populate("productId", "sku name unit status archivedAt")
+      .populate("warehouseId", "code name status")
+      .populate({
+        path: "stockId",
+        populate: [
+          {
+            path: "productId",
+            select: "sku name unit status archivedAt",
+          },
+          {
+            path: "warehouseId",
+            select: "code name status",
+          },
+        ],
+      });
 
     if (!stockMovement) {
       return res.status(404).json({

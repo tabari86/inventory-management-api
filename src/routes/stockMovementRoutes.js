@@ -14,7 +14,7 @@ const router = express.Router();
  * /api/stock-movements:
  *   get:
  *     summary: Retrieve all stock movements
- *     description: Read-only stock movement history. Available to admin, manager, and viewer roles.
+ *     description: Read-only history. New movements expose direct Product/Warehouse references, immutable bounded snapshots, exact before/after quantities, and aggregateVersion; legacy movements may omit these additive fields. Available to admin, manager, and viewer roles.
  *     tags:
  *       - Stock Movements
  *     security:
@@ -41,7 +41,7 @@ router.get(
  * /api/stock-movements/{id}:
  *   get:
  *     summary: Retrieve a single stock movement
- *     description: Read-only stock movement history. Available to admin, manager, and viewer roles.
+ *     description: Read-only history. New movements expose direct Product/Warehouse references, immutable bounded snapshots, exact before/after quantities, and aggregateVersion; legacy movements may omit these additive fields. Available to admin, manager, and viewer roles.
  *     tags:
  *       - Stock Movements
  *     security:

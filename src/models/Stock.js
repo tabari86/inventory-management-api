@@ -23,6 +23,25 @@ const stockSchema = new mongoose.Schema(
       enum: ["active", "inactive"],
       default: "active",
     },
+    version: {
+      type: Number,
+      required: true,
+      default: 1,
+      min: 1,
+      validate: Number.isInteger,
+    },
+    productLifecycleStatus: {
+      type: String,
+      required: true,
+      enum: ["active", "inactive", "archived"],
+      default: "active",
+    },
+    warehouseLifecycleStatus: {
+      type: String,
+      required: true,
+      enum: ["active", "inactive"],
+      default: "active",
+    },
   },
   {
     timestamps: true,

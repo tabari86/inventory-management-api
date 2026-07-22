@@ -38,7 +38,7 @@ const createStocksBulk = async (req, res, next) => {
 const getStocks = async (req, res, next) => {
   try {
     const stocks = await Stock.find()
-      .populate("productId", "sku name unit status")
+      .populate("productId", "sku name unit status archivedAt")
       .populate("warehouseId", "code name status")
       .sort({ createdAt: -1 });
 
@@ -63,7 +63,7 @@ const getStockById = async (req, res, next) => {
     }
 
     const stock = await Stock.findById(id)
-      .populate("productId", "sku name unit status")
+      .populate("productId", "sku name unit status archivedAt")
       .populate("warehouseId", "code name status");
 
     if (!stock) {

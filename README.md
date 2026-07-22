@@ -135,6 +135,11 @@ The API uses three roles:
 - Goods receipt workflow for increasing stock
 - Goods issue workflow for decreasing stock
 - Goods receipt and goods issue reject inactive stock records
+- Product and Warehouse inactivity is enforced by inventory workflows
+- Legacy Product DELETE routes archive documents and preserve references
+- Explicit Product, Warehouse and Stock aggregate versions
+- Transactionally synchronized Stock lifecycle guards
+- Stock movement parent snapshots, exact before/after quantities and aggregate versions
 - Conditional stock updates to reduce normal overselling risk
 - Transactional Stock and StockMovement persistence for inventory workflows
 - Read-only stock movement history
@@ -148,7 +153,7 @@ Supported bulk operations:
 
 - bulk product creation
 - bulk product update
-- bulk product deletion
+- bulk Product archive through the deprecated DELETE compatibility route
 - bulk warehouse creation
 - bulk warehouse update
 - bulk stock setup
@@ -187,10 +192,10 @@ Public registration is intentionally not available. The first admin user is crea
 | `POST`   | `/api/products`                | admin, manager         | Create a new product              |
 | `PATCH`  | `/api/products/:id`            | admin, manager         | Update product information        |
 | `PATCH`  | `/api/products/:id/deactivate` | admin, manager         | Deactivate a product              |
-| `DELETE` | `/api/products/:id`            | admin                  | Delete an inactive product        |
+| `DELETE` | `/api/products/:id`            | admin                  | Archive an inactive product (deprecated alias) |
 | `POST`   | `/api/products/bulk`           | admin, manager         | Create multiple products          |
 | `PATCH`  | `/api/products/bulk`           | admin, manager         | Update multiple products          |
-| `DELETE` | `/api/products/bulk`           | admin                  | Delete multiple inactive products |
+| `DELETE` | `/api/products/bulk`           | admin                  | Atomically archive inactive products (deprecated alias) |
 
 ### Warehouses
 
@@ -462,8 +467,11 @@ The seed command is safe to run again. If an admin already exists, no new admin 
 - Product unit is limited to predefined values.
 - New products are active by default.
 - Products can be updated partially.
-- Products must be deactivated before deletion.
-- Active products cannot be deleted.
+- Product and Warehouse updates expose an explicit `version`; `__v` is not the domain version.
+- Update/deactivate requests may supply an optional positive-integer `expectedVersion`.
+- Products must be deactivated before the legacy DELETE route can archive them.
+- Archive retains the Product, prevents SKU reuse, preserves Stock and movement references, and hides the Product from normal Product reads and updates.
+- Archived Products are terminal in the current API and have no restore endpoint.
 
 Supported product units:
 
@@ -481,6 +489,7 @@ meter
 - Warehouse codes are treated as business identifiers.
 - Warehouse codes cannot be changed through update endpoints.
 - Warehouses can be deactivated.
+- Inactive Warehouses remain readable and may be reactivated through PATCH.
 - Warehouses are not deleted.
 
 ### Stock Rules
@@ -490,6 +499,8 @@ meter
 - A stock record can only be created for an active product.
 - A stock record can only be created for an active warehouse.
 - Stock quantity starts at `0`.
+- Stock carries derived Product and Warehouse lifecycle guards plus an explicit aggregate `version`.
+- Stock creation conditionally touches each distinct parent version inside its transaction; that increment represents the new aggregate relationship.
 - Stock quantity is not changed directly through the stock API.
 
 ### Inventory Workflow Rules
@@ -499,9 +510,12 @@ meter
 - Goods issue creates a stock movement and decreases current stock quantity.
 - Goods issue is rejected when available quantity is insufficient.
 - Goods receipt and goods issue are rejected for inactive stock records.
+- Goods receipt and goods issue also reject inactive/archived Products, inactive Warehouses, missing parent references, and unresolved lifecycle guards.
 - Goods issue uses conditional stock updates to reduce normal concurrent overselling risk.
 - Goods receipt and goods issue commit Stock and StockMovement changes atomically.
 - Bulk goods receipt and issue requests are all-or-nothing transactions.
+- Every original movement item increments Stock version once. Repeated Stock IDs in bulk receive sequential before/after quantities and sequential `aggregateVersion` values in request order.
+- New movements include direct Product/Warehouse references and immutable `{sku,name}` / `{code,name}` snapshots.
 - Stock movements are read-only history.
 - Manual stock movement creation is intentionally not exposed.
 
@@ -607,7 +621,22 @@ Typed domain errors represent expected service failures internally. The global e
 
 Goods receipt and goods issue services use one MongoDB transaction per request. Stock changes and their StockMovement records commit together, and each bulk request is all-or-nothing. The previous manual compensation updates were removed.
 
-Transactions provide atomic database persistence, not retry-safe API requests or exactly-once execution. Idempotency, AuditEvent, OutboxEvent, Product/Warehouse lifecycle hardening, request/correlation IDs, and API versioning remain future work.
+Product and Warehouse mutation controllers delegate lifecycle, explicit version,
+compare-and-swap, archive, and Stock guard propagation behavior to dedicated
+application services. Parent lifecycle and related Stock guard changes commit in
+one transaction. Inventory transactions validate both authoritative parents and
+derived Stock guards, then write that same Stock aggregate so concurrent parent
+lifecycle changes conflict safely.
+
+`version` is the authoritative domain aggregate revision; Mongoose `__v` is not
+the API concurrency contract. `expectedVersion` is optional on the current
+legacy Product/Warehouse mutation APIs, so clients that omit it can still have
+last-write-wins behavior. Mandatory preconditions are deferred to an approved
+versioned API contract.
+
+Transactions provide atomic database persistence and driver retry safety, not
+retry-safe API requests or exactly-once execution. Idempotency, AuditEvent,
+OutboxEvent, request/correlation IDs, and API versioning remain future work.
 
 ### Models
 
@@ -677,6 +706,26 @@ Before using an existing production database, the following data-related checks 
 - MongoDB unique indexes
 - legacy refresh token data
 - production secret rotation
+
+Work Package 3 requires the controlled lifecycle/version migration before
+enforcement traffic is enabled. The command is dry-run by default:
+
+```bash
+npm run migrate:phase1-lifecycle
+```
+
+After reviewing invalid-version counts, orphan Stock reports, legacy movement
+counts, and duplicate `(stockId, aggregateVersion)` candidates, apply explicitly:
+
+```bash
+npm run migrate:phase1-lifecycle -- --apply
+```
+
+The script uses `MONGODB_URI`, never runs at application startup, does not
+delete data, and does not invent historical quantities, versions, or snapshots.
+It backfills only safely derivable direct movement references and creates the
+partial unique movement-version index only after duplicate preflight succeeds.
+See `docs/production-data-notes.md` for deployment and rollback guidance.
 
 These checks are operational deployment tasks and are not executed automatically by the application.
 
@@ -814,6 +863,12 @@ The tests cover:
 - bulk operations
 - request validation
 - inactive stock rejection in inventory workflows
+- inactive/archived Product and inactive Warehouse enforcement
+- Product archive, reference preservation, lifecycle metadata and optimistic conflicts
+- Stock lifecycle guard propagation and lifecycle-versus-inventory races
+- explicit aggregate versions, transaction retry behavior and sequential bulk versions
+- immutable StockMovement snapshots and historical direct references
+- migration dry-run, apply, rerun, orphan, duplicate-index and connection-close behavior
 - concurrent goods issue scenarios
 - production error handling behavior
 - MongoDB connection retry behavior
@@ -863,7 +918,9 @@ inventory-management-api/
 |       `-- ci.yml
 |
 |-- scripts/
-|   `-- seedAdmin.js
+|   |-- seedAdmin.js
+|   `-- migrations/
+|       `-- phase1LifecycleVersion.js
 |
 |-- src/
 |   |-- app.js
@@ -904,7 +961,9 @@ inventory-management-api/
 |   |
 |   |-- services/
 |   |   |-- inventoryService.js
-|   |   `-- stockService.js
+|   |   |-- stockService.js
+|   |   |-- productService.js
+|   |   `-- warehouseService.js
 |   |
 |   |-- utils/
 |   |   `-- transaction.js
@@ -937,7 +996,10 @@ inventory-management-api/
 |   |-- deploymentConfig.test.js
 |   |-- errorHandler.test.js
 |   |-- inventoryService.test.js
+|   |-- inventoryIntegrity.test.js
 |   |-- inventoryWorkflow.test.js
+|   |-- lifecycleVersion.test.js
+|   |-- migration.test.js
 |   |-- product.test.js
 |   |-- server.test.js
 |   |-- stock.test.js
@@ -989,6 +1051,12 @@ Implemented:
 - goods issue workflow
 - atomic Goods Receipt and Goods Issue transactions
 - all-or-nothing bulk inventory mutations
+- Product archive semantics with retained references and deprecated DELETE aliases
+- Product/Warehouse lifecycle metadata and transactional Stock guard propagation
+- explicit Product, Warehouse and Stock aggregate versions
+- optional legacy `expectedVersion` compare-and-swap preconditions
+- enriched StockMovement historical context and sequential aggregate versions
+- dry-run-first lifecycle/version migration with controlled partial unique index
 - read-only stock movement history
 - request validation with express-validator
 - SKU and warehouse-code normalization rules
@@ -1028,7 +1096,7 @@ Possible future improvements:
 - deployment smoke checks after Render release
 - stronger admin recovery workflow
 - database-level enforcement for one active admin if required
-- migration scripts for existing production data
+- future domain migrations beyond the lifecycle/version cutover
 - distributed rate limiting for multi-instance deployments
 - idempotency for safely retrying inventory requests
 
@@ -1064,6 +1132,10 @@ Some design choices are intentional:
 - no manual stock movement creation
 - stock movement history is generated by inventory workflows
 - goods receipt and goods issue reject inactive stock records
+- Product archive replaces supported runtime hard delete and preserves historical references
+- inventory workflows require active Product, Warehouse, Stock, and synchronized lifecycle guards
+- explicit `version` fields are domain revisions; `__v` remains Mongoose-internal
+- optional `expectedVersion` is transitional and omission still permits last-write-wins
 - goods issue uses conditional stock updates to reduce normal overselling risk
 - inventory workflows use MongoDB transactions, but requests are not idempotent or exactly-once
 - login rate limiting is process-local and suitable for this single-instance demo setup

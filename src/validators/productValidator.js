@@ -106,6 +106,21 @@ const updateProductValidation = [
     .optional()
     .isIn(["active", "inactive"])
     .withMessage("Invalid product status"),
+
+  body("expectedVersion")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
+
+  body("deactivationReason")
+    .optional()
+    .isString()
+    .withMessage("Deactivation reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Deactivation reason must be at most 500 characters long"),
 ];
 
 const createBulkProductsValidation = [
@@ -229,6 +244,21 @@ const updateBulkProductsValidation = [
     .optional()
     .isIn(["active", "inactive"])
     .withMessage("Invalid product status"),
+
+  body("*.expectedVersion")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
+
+  body("*.deactivationReason")
+    .optional()
+    .isString()
+    .withMessage("Deactivation reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Deactivation reason must be at most 500 characters long"),
 ];
 
 const deleteBulkProductsValidation = [
@@ -241,10 +271,46 @@ const deleteBulkProductsValidation = [
     .withMessage("Invalid product ID"),
 ];
 
+const deactivateProductValidation = [
+  body("expectedVersion")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
+
+  body("deactivationReason")
+    .optional()
+    .isString()
+    .withMessage("Deactivation reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Deactivation reason must be at most 500 characters long"),
+];
+
+const archiveProductValidation = [
+  body("expectedVersion")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
+
+  body("archiveReason")
+    .optional()
+    .isString()
+    .withMessage("Archive reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Archive reason must be at most 500 characters long"),
+];
+
 module.exports = {
   createProductValidation,
   updateProductValidation,
   createBulkProductsValidation,
   updateBulkProductsValidation,
   deleteBulkProductsValidation,
+  deactivateProductValidation,
+  archiveProductValidation,
 };

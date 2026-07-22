@@ -2,6 +2,8 @@ const request = require("supertest");
 
 const app = require("../src/app");
 const Product = require("../src/models/Product");
+const Stock = require("../src/models/Stock");
+const Warehouse = require("../src/models/Warehouse");
 const {
   createAdminToken,
   createManagerToken,
@@ -10,7 +12,40 @@ const {
 
 require("./setupTestDb");
 
+const captureProductAndStockState = async () => ({
+  products: await Product.find({}).sort({ _id: 1 }).lean(),
+  stocks: await Stock.find({}).sort({ _id: 1 }).lean(),
+});
+
+const createRelatedStocks = async (products, code) => {
+  const warehouse = await Warehouse.create({
+    code,
+    name: `${code} Warehouse`,
+  });
+
+  return Stock.create(
+    products.map((product) => ({
+      productId: product._id,
+      warehouseId: warehouse._id,
+    }))
+  );
+};
+
+const createSkuOwnershipFixture = async (prefix) => {
+  const products = await Product.create([
+    { sku: `${prefix}-A`, name: `${prefix} Product A` },
+    { sku: `${prefix}-B`, name: `${prefix} Product B` },
+  ]);
+  const stocks = await createRelatedStocks(products, `${prefix}-WH`);
+
+  return { products, stocks };
+};
+
 describe("Product API", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it("allows authenticated viewers to retrieve products", async () => {
     const viewerToken = await createViewerToken();
     const response = await request(app)
@@ -98,7 +133,10 @@ describe("Product API", () => {
       .delete(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${adminToken}`);
     expect(adminResponse.statusCode).toBe(200);
-    expect(await Product.findById(product._id)).toBeNull();
+    const archivedProduct = await Product.findById(product._id);
+    expect(archivedProduct).not.toBeNull();
+    expect(archivedProduct.status).toBe("inactive");
+    expect(archivedProduct.archivedAt).toEqual(expect.any(Date));
   });
 
   it("bulk creates products for a manager", async () => {
@@ -162,9 +200,269 @@ describe("Product API", () => {
       ]);
 
     expect(response.statusCode).toBe(200);
+    expect(response.body.message).toBe("Products updated successfully");
     expect(response.body.data.updatedCount).toBe(2);
-    expect((await Product.findById(products[0]._id)).name).toBe("Updated One");
-    expect((await Product.findById(products[1]._id)).status).toBe("inactive");
+    expect(await Product.findById(products[0]._id)).toMatchObject({
+      name: "Updated One",
+      version: 2,
+    });
+    expect(await Product.findById(products[1]._id)).toMatchObject({
+      status: "inactive",
+      version: 2,
+    });
+  });
+
+  it("keeps duplicate explicitly submitted bulk SKUs as a 400 with no writes", async () => {
+    const managerToken = await createManagerToken();
+    const products = await Product.create([
+      { sku: "EXPLICIT-DUPLICATE-1", name: "Explicit Duplicate One" },
+      { sku: "EXPLICIT-DUPLICATE-2", name: "Explicit Duplicate Two" },
+    ]);
+    await createRelatedStocks(products, "EXPLICIT-DUPLICATE-WH");
+    const before = await captureProductAndStockState();
+
+    const response = await request(app)
+      .patch("/api/products/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          id: products[0]._id.toString(),
+          sku: "SHARED-TARGET",
+          status: "inactive",
+        },
+        {
+          id: products[1]._id.toString(),
+          sku: "SHARED-TARGET",
+          name: "Must Not Commit",
+        },
+      ]);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      message: "Duplicate SKUs are not allowed in the same request",
+    });
+    expect(await captureProductAndStockState()).toEqual(before);
+  });
+
+  it("returns the baseline 409 when a selected Product retains the requested SKU", async () => {
+    const managerToken = await createManagerToken();
+    const products = await Product.create([
+      { sku: "RETAINED-OWNER-1", name: "Retained Owner One" },
+      { sku: "RETAINED-OWNER-2", name: "Retained Owner Two" },
+    ]);
+    const warehouse = await Warehouse.create({
+      code: "RETAINED-OWNER-WH",
+      name: "Retained Owner Warehouse",
+    });
+    const stock = await Stock.create({
+      productId: products[0]._id,
+      warehouseId: warehouse._id,
+    });
+    const before = await captureProductAndStockState();
+
+    const response = await request(app)
+      .patch("/api/products/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          id: products[0]._id.toString(),
+          sku: products[1].sku,
+          status: "inactive",
+        },
+        {
+          id: products[1]._id.toString(),
+          name: "Must Not Commit",
+        },
+      ]);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      message: "One or more product SKUs already exist",
+    });
+    expect(await captureProductAndStockState()).toEqual(before);
+    expect(await Stock.findById(stock._id)).toMatchObject({
+      productLifecycleStatus: "active",
+      version: 1,
+    });
+  });
+
+  it("returns 409 when a bulk SKU collides with an unselected Product", async () => {
+    const managerToken = await createManagerToken();
+    const [selectedProduct, unselectedProduct] = await Product.create([
+      { sku: "SELECTED-OWNER", name: "Selected Product" },
+      { sku: "UNSELECTED-OWNER", name: "Unselected Product" },
+    ]);
+    await createRelatedStocks([selectedProduct], "UNSELECTED-OWNER-WH");
+    const before = await captureProductAndStockState();
+
+    const response = await request(app)
+      .patch("/api/products/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          id: selectedProduct._id.toString(),
+          sku: unselectedProduct.sku,
+          name: "Must Not Commit",
+        },
+      ]);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      message: "One or more product SKUs already exist",
+    });
+    expect(await captureProductAndStockState()).toEqual(before);
+  });
+
+  it.each([
+    ["taker first", ["taker", "owner"]],
+    ["owner first", ["owner", "taker"]],
+  ])(
+    "rejects a selected-owner move-away with 409 when the %s",
+    async (_scenario, order) => {
+      const managerToken = await createManagerToken();
+      const { products } = await createSkuOwnershipFixture("MOVE-AWAY");
+      const updateByRole = {
+        taker: {
+          id: products[0]._id.toString(),
+          sku: products[1].sku,
+          status: "inactive",
+        },
+        owner: {
+          id: products[1]._id.toString(),
+          sku: "MOVE-AWAY-B-NEW",
+          name: "Must Not Commit",
+        },
+      };
+      const before = await captureProductAndStockState();
+
+      const response = await request(app)
+        .patch("/api/products/bulk")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send(order.map((role) => updateByRole[role]));
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toEqual({
+        message: "One or more product SKUs already exist",
+      });
+      expect(await captureProductAndStockState()).toEqual(before);
+    }
+  );
+
+  it.each([
+    ["A then B", ["a", "b"]],
+    ["B then A", ["b", "a"]],
+  ])(
+    "rejects a direct SKU swap in order %s without writes",
+    async (_scenario, order) => {
+      const managerToken = await createManagerToken();
+      const { products } = await createSkuOwnershipFixture("DIRECT-SWAP");
+      const updateByRole = {
+        a: {
+          id: products[0]._id.toString(),
+          sku: products[1].sku,
+          status: "inactive",
+        },
+        b: {
+          id: products[1]._id.toString(),
+          sku: products[0].sku,
+          name: "Must Not Commit",
+        },
+      };
+      const before = await captureProductAndStockState();
+
+      const response = await request(app)
+        .patch("/api/products/bulk")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send(order.map((role) => updateByRole[role]));
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toEqual({
+        message: "One or more product SKUs already exist",
+      });
+      expect(await captureProductAndStockState()).toEqual(before);
+    }
+  );
+
+  it("updates one Product while preserving a selected no-op Product and all Stock guards", async () => {
+    const managerToken = await createManagerToken();
+    const { products } = await createSkuOwnershipFixture("VALID-NOOP");
+    const unchangedBefore = await Product.findById(products[1]._id).lean();
+    const stocksBefore = await Stock.find({}).sort({ _id: 1 }).lean();
+
+    const response = await request(app)
+      .patch("/api/products/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          id: products[0]._id.toString(),
+          sku: "VALID-NOOP-A-NEW",
+          name: "Meaningfully Updated",
+        },
+        {
+          id: products[1]._id.toString(),
+          sku: products[1].sku,
+          name: products[1].name,
+          status: products[1].status,
+        },
+      ]);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({
+      message: "Products updated successfully",
+      data: {
+        updatedCount: 2,
+        products: expect.any(Array),
+      },
+    });
+    expect(response.body.data.products).toHaveLength(2);
+    expect(
+      response.body.data.products.map(({ _id, version }) => ({ _id, version }))
+    ).toEqual([
+      { _id: products[0]._id.toString(), version: 2 },
+      { _id: products[1]._id.toString(), version: 1 },
+    ]);
+    expect(await Product.findById(products[0]._id)).toMatchObject({
+      sku: "VALID-NOOP-A-NEW",
+      name: "Meaningfully Updated",
+      version: 2,
+    });
+    expect(await Product.findById(products[1]._id).lean()).toEqual(
+      unchangedBefore
+    );
+    expect(await Stock.find({}).sort({ _id: 1 }).lean()).toEqual(stocksBefore);
+  });
+
+  it("maps an injected duplicate-key race to atomic 409 without partial writes", async () => {
+    const managerToken = await createManagerToken();
+    const { products } = await createSkuOwnershipFixture("DUPLICATE-RACE");
+    const before = await captureProductAndStockState();
+    const duplicateError = Object.assign(new Error("E11000 duplicate key"), {
+      code: 11000,
+    });
+    const originalFindOneAndUpdate = Product.findOneAndUpdate.bind(Product);
+    let writeAttempts = 0;
+    jest
+      .spyOn(Product, "findOneAndUpdate")
+      .mockImplementation(async (...args) => {
+        writeAttempts += 1;
+        if (writeAttempts === 2) throw duplicateError;
+        return originalFindOneAndUpdate(...args);
+      });
+
+    const response = await request(app)
+      .patch("/api/products/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        { id: products[0]._id.toString(), name: "First Must Roll Back" },
+        { id: products[1]._id.toString(), name: "Second Must Fail" },
+      ]);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      message: "One or more product SKUs already exist",
+    });
+    expect(writeAttempts).toBe(2);
+    expect(await captureProductAndStockState()).toEqual(before);
   });
 
   it("requires an admin for bulk deletion", async () => {
@@ -213,7 +511,8 @@ describe("Product API", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body.data.deletedCount).toBe(2);
-    expect(await Product.countDocuments()).toBe(0);
+    expect(await Product.countDocuments()).toBe(2);
+    expect(await Product.countDocuments({ archivedAt: { $ne: null } })).toBe(2);
   });
 
   it("rejects an empty single-product update", async () => {

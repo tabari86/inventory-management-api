@@ -1,5 +1,6 @@
 const Warehouse = require("../models/Warehouse");
 const mongoose = require("mongoose");
+const warehouseService = require("../services/warehouseService");
 
 const createWarehouse = async (req, res, next) => {
   try {
@@ -38,10 +39,14 @@ const createWarehouse = async (req, res, next) => {
 
 const createWarehousesBulk = async (req, res, next) => {
   try {
-    const warehousesToCreate = req.body.map((warehouse) => ({
-      ...warehouse,
-      code: warehouse.code.toUpperCase(),
-    }));
+    const warehousesToCreate = req.body.map(
+      ({ code, name, description, status }) => ({
+        code: code.toUpperCase(),
+        name,
+        description,
+        status,
+      })
+    );
     const codes = warehousesToCreate.map((warehouse) => warehouse.code);
 
     if (new Set(codes).size !== codes.length) {
@@ -81,57 +86,28 @@ const createWarehousesBulk = async (req, res, next) => {
 
 const updateWarehousesBulk = async (req, res, next) => {
   try {
-    const updates = req.body;
-    const ids = updates.map((warehouse) => warehouse.id);
-
-    if (new Set(ids).size !== ids.length) {
-      return res.status(400).json({
-        message: "Duplicate warehouse IDs are not allowed in the same request",
-      });
-    }
-
-    const warehouses = await Warehouse.find({ _id: { $in: ids } });
-
-    if (warehouses.length !== ids.length) {
-      return res.status(404).json({
-        message: "One or more warehouses were not found",
-      });
-    }
-
-    const updatableFields = ["name", "description", "status"];
-    const operations = updates.map(({ id, ...update }) => {
-      const fieldsToUpdate = {};
-
-      for (const field of updatableFields) {
-        if (Object.prototype.hasOwnProperty.call(update, field)) {
-          fieldsToUpdate[field] = update[field];
-        }
-      }
-
-      return {
-        updateOne: {
-          filter: { _id: id },
-          update: { $set: fieldsToUpdate },
-        },
-      };
-    });
-
-    await Warehouse.bulkWrite(operations);
-
-    const updatedWarehouses = await Warehouse.find({ _id: { $in: ids } });
-    const warehouseById = new Map(
-      updatedWarehouses.map((warehouse) => [warehouse._id.toString(), warehouse])
+    const updates = req.body.map(
+      ({ id, name, description, status, expectedVersion, deactivationReason }) =>
+        ({
+          id,
+          name,
+          description,
+          status,
+          expectedVersion,
+          deactivationReason,
+        })
     );
+    const data = await warehouseService.updateWarehousesBulk({
+      updates,
+      actorId: req.user.id,
+    });
 
     return res.status(200).json({
       message: "Warehouses updated successfully",
-      data: {
-        updatedCount: updatedWarehouses.length,
-        warehouses: ids.map((id) => warehouseById.get(id)),
-      },
+      data,
     });
   } catch (error) {
-    error.message = "Could not update warehouses";
+    error.clientMessage = "Could not update warehouses";
     next(error);
   }
 };
@@ -181,66 +157,51 @@ const getWarehouseById = async (req, res, next) => {
 const updateWarehouse = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, description, status } = req.body;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid warehouse ID",
-      });
-    }
-
-    const warehouse = await Warehouse.findById(id);
-
-    if (!warehouse) {
-      return res.status(404).json({
-        message: "Warehouse not found",
-      });
-    }
-
-    if (name !== undefined) warehouse.name = name;
-    if (description !== undefined) warehouse.description = description;
-    if (status !== undefined) warehouse.status = status;
-
-    const updatedWarehouse = await warehouse.save();
+    const {
+      name,
+      description,
+      status,
+      expectedVersion,
+      deactivationReason,
+    } = req.body;
+    const updatedWarehouse = await warehouseService.updateWarehouse({
+      warehouseId: id,
+      actorId: req.user.id,
+      update: {
+        name,
+        description,
+        status,
+        expectedVersion,
+        deactivationReason,
+      },
+    });
 
     return res.status(200).json({
       message: "Warehouse updated successfully",
       data: updatedWarehouse,
     });
   } catch (error) {
-    error.message = "Could not update warehouse";
+    error.clientMessage = "Could not update warehouse";
     next(error);
   }
 };
 
 const deactivateWarehouse = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid warehouse ID",
-      });
-    }
-
-    const warehouse = await Warehouse.findById(id);
-
-    if (!warehouse) {
-      return res.status(404).json({
-        message: "Warehouse not found",
-      });
-    }
-
-    warehouse.status = "inactive";
-
-    const updatedWarehouse = await warehouse.save();
+    const body = req.body || {};
+    const updatedWarehouse = await warehouseService.deactivateWarehouse({
+      warehouseId: req.params.id,
+      actorId: req.user.id,
+      expectedVersion: body.expectedVersion,
+      deactivationReason: body.deactivationReason,
+    });
 
     return res.status(200).json({
       message: "Warehouse deactivated successfully",
       data: updatedWarehouse,
     });
   } catch (error) {
-    error.message = "Could not deactivate warehouse";
+    error.clientMessage = "Could not deactivate warehouse";
     next(error);
   }
 };

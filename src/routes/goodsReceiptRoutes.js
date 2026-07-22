@@ -77,7 +77,7 @@ const router = express.Router();
  *       404:
  *         description: One or more stock records were not found
  *       409:
- *         description: One or more stock records are inactive
+ *         description: One or more Stock, Product, or Warehouse lifecycle checks reject the receipt
  *       500:
  *         description: Could not complete goods receipts
  */
@@ -137,7 +137,7 @@ router.post(
  *       404:
  *         description: Stock record not found
  *       409:
- *         description: The stock record is inactive
+ *         description: Stock, Product, or Warehouse lifecycle checks reject the receipt
  *       500:
  *         description: Could not complete goods receipt
  */

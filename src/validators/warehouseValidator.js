@@ -85,6 +85,21 @@ const updateWarehouseValidation = [
     .optional()
     .isIn(["active", "inactive"])
     .withMessage("Invalid warehouse status"),
+
+  body("expectedVersion")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
+
+  body("deactivationReason")
+    .optional()
+    .isString()
+    .withMessage("Deactivation reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Deactivation reason must be at most 500 characters long"),
 ];
 
 const createBulkWarehousesValidation = [
@@ -130,6 +145,23 @@ const createBulkWarehousesValidation = [
     .optional()
     .isIn(["active", "inactive"])
     .withMessage("Invalid warehouse status"),
+];
+
+const deactivateWarehouseValidation = [
+  body("expectedVersion")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
+
+  body("deactivationReason")
+    .optional()
+    .isString()
+    .withMessage("Deactivation reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Deactivation reason must be at most 500 characters long"),
 ];
 
 const updateBulkWarehousesValidation = [
@@ -187,6 +219,21 @@ const updateBulkWarehousesValidation = [
     .optional()
     .isIn(["active", "inactive"])
     .withMessage("Invalid warehouse status"),
+
+  body("*.expectedVersion")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
+
+  body("*.deactivationReason")
+    .optional()
+    .isString()
+    .withMessage("Deactivation reason must be a string")
+    .bail()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Deactivation reason must be at most 500 characters long"),
 ];
 
 module.exports = {
@@ -194,4 +241,5 @@ module.exports = {
   updateWarehouseValidation,
   createBulkWarehousesValidation,
   updateBulkWarehousesValidation,
+  deactivateWarehouseValidation,
 };
