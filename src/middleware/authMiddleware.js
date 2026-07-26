@@ -38,6 +38,11 @@ const authenticateUser = async (req, res, next) => {
       status: user.status,
     };
 
+    req.applicationContext.actor = {
+      type: "user",
+      id: user._id.toString(),
+    };
+
     next();
   } catch (error) {
     return res.status(401).json({

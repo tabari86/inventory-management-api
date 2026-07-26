@@ -84,3 +84,46 @@ again physically delete Products if it is redeployed; block or avoid legacy
 DELETE traffic during rollback. Do not decrement versions or erase archive and
 movement context. Index removal, if ever required, must be a separately reviewed
 database operation after confirming no deployed writer relies on uniqueness.
+
+## Idempotency index migration
+
+Request idempotency uses a new `idempotencyrecords` collection and does not
+require a document backfill. Production must not rely only on model auto-index
+behavior; runtime auto-index creation is disabled for this model. The controlled
+migration is dry-run by default:
+
+```bash
+npm run migrate:phase1-idempotency
+```
+
+Apply requires exactly the explicit flag:
+
+```bash
+npm run migrate:phase1-idempotency -- --apply
+```
+
+The migration inspects collection/index state and valid duplicate scopes. It
+requires a unique index on
+`{ actorType: 1, actorId: 1, operationId: 1, keyHash: 1 }` and a single-field
+TTL index on `{ expiresAt: 1 }` with `expireAfterSeconds: 0`. Equivalent indexes
+under alternate names are accepted. Incompatible reserved names, wrong key
+order/direction, non-unique scope indexes, wrong TTL values, compound TTL
+definitions, or duplicate valid scopes block apply. The tool never drops,
+renames, repairs, deletes, or fabricates data.
+
+The production rollout order is:
+
+1. Deploy the idempotency migration tooling.
+2. Run the dry-run against the intended database.
+3. Inspect the safe summary and resolve blockers through a separately reviewed
+   data/index operation.
+4. Run the explicit apply command.
+5. Verify both required index semantics.
+6. Deploy the application code.
+7. Smoke-test an original keyed mutation, replay, conflict, and an unkeyed call.
+
+This repository does not claim that either production migration command has
+been executed. Completed records expire seven days after completion, but the
+MongoDB TTL monitor removes them asynchronously. A still-present expired record
+remains authoritative; the key can be reused after physical removal. There is
+no application cleanup job or request-time deletion.

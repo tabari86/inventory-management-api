@@ -634,9 +634,41 @@ legacy Product/Warehouse mutation APIs, so clients that omit it can still have
 last-write-wins behavior. Mandatory preconditions are deferred to an approved
 versioned API contract.
 
-Transactions provide atomic database persistence and driver retry safety, not
-retry-safe API requests or exactly-once execution. Idempotency, AuditEvent,
-OutboxEvent, request/correlation IDs, and API versioning remain future work.
+Transactions provide atomic database persistence and driver retry safety.
+Inventory Core mutation routes additionally support optional, actor-scoped
+idempotency for retry-safe HTTP execution. AuditEvent, OutboxEvent, machine
+identity, and API versioning remain future work.
+
+### Request context and optional idempotency
+
+Every HTTP attempt receives a server-generated UUID in `X-Request-ID`. A valid
+incoming `X-Correlation-ID` (1-128 characters matching
+`^[A-Za-z0-9._:-]+$`) is propagated; when omitted it defaults to the request
+ID. Invalid correlation values fail with 400 before authentication or mutation.
+Both values live in an explicit plain application context. Authentication adds
+only the current user actor type and ID; tokens, roles, names, and email are not
+copied into persistence context.
+
+All Product, Warehouse, Stock, Goods Receipt, and Goods Issue mutation routes
+accept an optional `Idempotency-Key`. Keys are case-sensitive, 8-128 characters,
+and use the same safe character set. The raw value is never stored: SHA-256 is
+used in the unique actor/operation scope. The normalized business command is
+hashed with `canonical-json-v1`, after validation and normalization.
+
+The first successful keyed execution returns `Idempotency-Replayed: false`.
+The same actor, operation, key, and normalized command later receives the exact
+stored successful status/body with `Idempotency-Replayed: true` and fresh
+request/correlation response headers. A changed command returns 409 and current
+authentication/RBAC is evaluated before every replay. Only committed 2xx
+responses are stored. Failures do not reserve a key.
+
+Acquisition, the complete domain mutation, StockMovement writes, the response
+snapshot, and completion share one MongoDB transaction. MongoDB's unique scope
+index is the concurrency authority; there is no process-local or external lock,
+cleanup worker, or retry worker. Replay snapshots are limited to 1 MiB and are
+retained for seven days. MongoDB TTL deletion is asynchronous, so a record can
+remain authoritative slightly longer; the key becomes reusable after physical
+TTL removal.
 
 ### Models
 
@@ -1081,7 +1113,6 @@ Current focus:
 - production data verification
 - deployment verification after push
 - operational monitoring improvements
-- retry safety and idempotency for inventory requests
 
 ---
 
@@ -1098,7 +1129,7 @@ Possible future improvements:
 - database-level enforcement for one active admin if required
 - future domain migrations beyond the lifecycle/version cutover
 - distributed rate limiting for multi-instance deployments
-- idempotency for safely retrying inventory requests
+- AuditEvent and OutboxEvent integration using the existing request context
 
 ---
 
@@ -1137,7 +1168,7 @@ Some design choices are intentional:
 - explicit `version` fields are domain revisions; `__v` remains Mongoose-internal
 - optional `expectedVersion` is transitional and omission still permits last-write-wins
 - goods issue uses conditional stock updates to reduce normal overselling risk
-- inventory workflows use MongoDB transactions, but requests are not idempotent or exactly-once
+- Inventory Core mutations use MongoDB transactions and support optional seven-day idempotent replay; callers that omit the header retain legacy behavior
 - login rate limiting is process-local and suitable for this single-instance demo setup
 - Swagger is public for portfolio/demo visibility, while protected endpoints still require authentication
 - production data compatibility notes are documented separately in `docs/production-data-notes.md`

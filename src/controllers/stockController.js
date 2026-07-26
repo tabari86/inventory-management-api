@@ -1,19 +1,42 @@
 const mongoose = require("mongoose");
 
 const Stock = require("../models/Stock");
+const { sendInventoryMutation } = require("../services/idempotencyExecutor");
 const stockService = require("../services/stockService");
+const { buildCanonicalCommand } = require("../utils/canonicalJson");
+
+const normalizeId = (id) => String(id).toLowerCase();
+const commandFor = (req, normalizedBody) =>
+  buildCanonicalCommand({
+    operationId: req.inventoryOperation.operationId,
+    pathParameters: {},
+    semanticQueryParameters: {},
+    normalizedBody,
+  });
 
 const createStock = async (req, res, next) => {
   try {
     const { productId, warehouseId } = req.body;
-    const stock = await stockService.createStock({
-      productId,
-      warehouseId,
-    });
-
-    return res.status(201).json({
-      message: "Stock record created successfully",
-      data: stock,
+    const input = {
+      productId: normalizeId(productId),
+      warehouseId: normalizeId(warehouseId),
+    };
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 201,
+      command: commandFor(req, input),
+      execute: ({ session }) =>
+        stockService.createStock({
+          productId,
+          warehouseId,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (stock) => ({
+        message: "Stock record created successfully",
+        data: stock,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not create stock record";
@@ -23,11 +46,25 @@ const createStock = async (req, res, next) => {
 
 const createStocksBulk = async (req, res, next) => {
   try {
-    const data = await stockService.createStocksBulk({ stocks: req.body });
-
-    return res.status(201).json({
-      message: "Stock records created successfully",
-      data,
+    const normalizedStocks = req.body.map(({ productId, warehouseId }) => ({
+      productId: normalizeId(productId),
+      warehouseId: normalizeId(warehouseId),
+    }));
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 201,
+      command: commandFor(req, normalizedStocks),
+      execute: ({ session }) =>
+        stockService.createStocksBulk({
+          stocks: req.body,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (data) => ({
+        message: "Stock records created successfully",
+        data,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not create stock records";

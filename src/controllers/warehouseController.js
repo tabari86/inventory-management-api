@@ -1,6 +1,17 @@
 const Warehouse = require("../models/Warehouse");
 const mongoose = require("mongoose");
+const { sendInventoryMutation } = require("../services/idempotencyExecutor");
 const warehouseService = require("../services/warehouseService");
+const { buildCanonicalCommand } = require("../utils/canonicalJson");
+
+const normalizeId = (id) => String(id).toLowerCase();
+const commandFor = (req, normalizedBody, pathParameters = {}) =>
+  buildCanonicalCommand({
+    operationId: req.inventoryOperation.operationId,
+    pathParameters,
+    semanticQueryParameters: {},
+    normalizedBody,
+  });
 
 const createWarehouse = async (req, res, next) => {
   try {
@@ -12,24 +23,28 @@ const createWarehouse = async (req, res, next) => {
       });
     }
 
-    const existingWarehouse = await Warehouse.findOne({ code: code.toUpperCase() });
-
-    if (existingWarehouse) {
-      return res.status(409).json({
-        message: "A warehouse with this code already exists",
-      });
-    }
-
-    const warehouse = await Warehouse.create({
+    const input = {
       code: code.toUpperCase(),
       name,
       description,
       status,
-    });
+    };
 
-    return res.status(201).json({
-      message: "Warehouse created successfully",
-      data: warehouse,
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 201,
+      command: commandFor(req, input),
+      execute: ({ session }) =>
+        warehouseService.createWarehouse({
+          ...input,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (warehouse) => ({
+        message: "Warehouse created successfully",
+        data: warehouse,
+      }),
     });
   } catch (error) {
     error.message = "Could not create warehouse";
@@ -47,39 +62,24 @@ const createWarehousesBulk = async (req, res, next) => {
         status,
       })
     );
-    const codes = warehousesToCreate.map((warehouse) => warehouse.code);
-
-    if (new Set(codes).size !== codes.length) {
-      return res.status(400).json({
-        message: "Duplicate warehouse codes are not allowed in the same request",
-      });
-    }
-
-    const existingWarehouse = await Warehouse.findOne({ code: { $in: codes } });
-
-    if (existingWarehouse) {
-      return res.status(409).json({
-        message: "One or more warehouse codes already exist",
-      });
-    }
-
-    const warehouses = await Warehouse.insertMany(warehousesToCreate);
-
-    return res.status(201).json({
-      message: "Warehouses created successfully",
-      data: {
-        createdCount: warehouses.length,
-        warehouses,
-      },
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 201,
+      command: commandFor(req, warehousesToCreate),
+      execute: ({ session }) =>
+        warehouseService.createWarehousesBulk({
+          warehouses: warehousesToCreate,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (data) => ({
+        message: "Warehouses created successfully",
+        data,
+      }),
     });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({
-        message: "One or more warehouse codes already exist",
-      });
-    }
-
-    error.message = "Could not create warehouses";
+    error.clientMessage = "Could not create warehouses";
     next(error);
   }
 };
@@ -97,14 +97,25 @@ const updateWarehousesBulk = async (req, res, next) => {
           deactivationReason,
         })
     );
-    const data = await warehouseService.updateWarehousesBulk({
-      updates,
-      actorId: req.user.id,
-    });
-
-    return res.status(200).json({
-      message: "Warehouses updated successfully",
-      data,
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(
+        req,
+        updates.map((update) => ({ ...update, id: normalizeId(update.id) }))
+      ),
+      execute: ({ session }) =>
+        warehouseService.updateWarehousesBulk({
+          updates,
+          actorId: req.user.id,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (data) => ({
+        message: "Warehouses updated successfully",
+        data,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not update warehouses";
@@ -164,21 +175,30 @@ const updateWarehouse = async (req, res, next) => {
       expectedVersion,
       deactivationReason,
     } = req.body;
-    const updatedWarehouse = await warehouseService.updateWarehouse({
-      warehouseId: id,
-      actorId: req.user.id,
-      update: {
-        name,
-        description,
-        status,
-        expectedVersion,
-        deactivationReason,
-      },
-    });
-
-    return res.status(200).json({
-      message: "Warehouse updated successfully",
-      data: updatedWarehouse,
+    const update = {
+      name,
+      description,
+      status,
+      expectedVersion,
+      deactivationReason,
+    };
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(req, update, { id: normalizeId(id) }),
+      execute: ({ session }) =>
+        warehouseService.updateWarehouse({
+          warehouseId: id,
+          actorId: req.user.id,
+          update,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (updatedWarehouse) => ({
+        message: "Warehouse updated successfully",
+        data: updatedWarehouse,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not update warehouse";
@@ -189,16 +209,27 @@ const updateWarehouse = async (req, res, next) => {
 const deactivateWarehouse = async (req, res, next) => {
   try {
     const body = req.body || {};
-    const updatedWarehouse = await warehouseService.deactivateWarehouse({
-      warehouseId: req.params.id,
-      actorId: req.user.id,
+    const input = {
       expectedVersion: body.expectedVersion,
       deactivationReason: body.deactivationReason,
-    });
-
-    return res.status(200).json({
-      message: "Warehouse deactivated successfully",
-      data: updatedWarehouse,
+    };
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(req, input, { id: normalizeId(req.params.id) }),
+      execute: ({ session }) =>
+        warehouseService.deactivateWarehouse({
+          warehouseId: req.params.id,
+          actorId: req.user.id,
+          ...input,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (updatedWarehouse) => ({
+        message: "Warehouse deactivated successfully",
+        data: updatedWarehouse,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not deactivate warehouse";

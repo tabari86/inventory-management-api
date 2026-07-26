@@ -1,4 +1,7 @@
 const swaggerJsdoc = require("swagger-jsdoc");
+const {
+  mutationOperationRegistry,
+} = require("../services/inventoryOperationRegistry");
 
 const productionServerUrl =
   process.env.SWAGGER_PRODUCTION_URL ||
@@ -323,5 +326,174 @@ const swaggerOptions = {
 };
 
 const swaggerSpec = swaggerJsdoc(swaggerOptions);
+
+swaggerSpec.components.parameters = {
+  ...(swaggerSpec.components.parameters || {}),
+  CorrelationId: {
+    name: "X-Correlation-ID",
+    in: "header",
+    required: false,
+    description:
+      "Identifies a caller-provided operation chain. A valid value is echoed in responses; when absent, it defaults to the server-generated request ID. Invalid values return 400. It does not define idempotency identity, and changing it does not prevent same-payload replay.",
+    schema: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[A-Za-z0-9._:-]+$",
+    },
+  },
+  IdempotencyKey: {
+    name: "Idempotency-Key",
+    in: "header",
+    required: false,
+    description:
+      "Optional opaque, case-sensitive key (8-128 characters; A-Z, a-z, 0-9, dot, underscore, colon, and hyphen). It is scoped to the current authenticated actor and stable business operation. The raw key is never stored; its SHA-256 digest is retained for seven days. Reusing the key with the same normalized command replays the exact successful status/body, while a different command conflicts.",
+    schema: {
+      type: "string",
+      minLength: 8,
+      maxLength: 128,
+      pattern: "^[A-Za-z0-9._:-]+$",
+    },
+  },
+};
+
+swaggerSpec.components.headers = {
+  ...(swaggerSpec.components.headers || {}),
+  XRequestId: {
+    description: "Server-generated UUID for this HTTP attempt.",
+    schema: { type: "string", format: "uuid" },
+  },
+  XCorrelationId: {
+    description:
+      "Accepted valid client correlation ID, or the server request ID when omitted.",
+    schema: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[A-Za-z0-9._:-]+$",
+    },
+  },
+  IdempotencyReplayed: {
+    description:
+      "false for an original successful keyed execution, true for a replay, and absent when no idempotency key is supplied.",
+    schema: { type: "string", enum: ["true", "false"] },
+  },
+};
+
+const requestContextResponseHeaders = {
+  "X-Request-ID": { $ref: "#/components/headers/XRequestId" },
+  "X-Correlation-ID": { $ref: "#/components/headers/XCorrelationId" },
+};
+
+const httpMethods = new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "options",
+  "head",
+]);
+
+const hasHeaderParameter = (operation, name, reference) =>
+  (operation.parameters || []).some(
+    (parameter) =>
+      parameter.$ref === reference ||
+      (parameter.in === "header" && parameter.name === name)
+  );
+
+const mergeErrorCodes = (response, extension, errorCodes) => {
+  const existing = response[extension];
+  const existingCodes = Array.isArray(existing)
+    ? existing
+    : existing === undefined
+      ? []
+      : [existing];
+
+  response[extension] = [...new Set([...existingCodes, ...errorCodes])];
+};
+
+for (const pathItem of Object.values(swaggerSpec.paths)) {
+  for (const [method, operation] of Object.entries(pathItem)) {
+    if (!httpMethods.has(method) || !operation.responses) continue;
+    const correlationReference = "#/components/parameters/CorrelationId";
+    if (
+      !hasHeaderParameter(operation, "X-Correlation-ID", correlationReference)
+    ) {
+      operation.parameters = [
+        ...(operation.parameters || []),
+        { $ref: correlationReference },
+      ];
+    }
+
+    operation.responses["400"] ||= {
+      description: "Invalid X-Correlation-ID header",
+      content: {
+        "application/json": {
+          schema: {
+            $ref: "#/components/schemas/ErrorResponse",
+          },
+        },
+      },
+    };
+    mergeErrorCodes(
+      operation.responses["400"],
+      "x-request-context-errors",
+      ["INVALID_CORRELATION_ID"]
+    );
+
+    for (const response of Object.values(operation.responses)) {
+      response.headers = {
+        ...(response.headers || {}),
+        ...requestContextResponseHeaders,
+      };
+    }
+  }
+}
+
+for (const { method, path, operationId } of mutationOperationRegistry) {
+  const operation = swaggerSpec.paths[path]?.[method];
+  if (!operation) continue;
+
+  operation.operationId = operationId;
+  const idempotencyReference = "#/components/parameters/IdempotencyKey";
+  if (
+    !hasHeaderParameter(operation, "Idempotency-Key", idempotencyReference)
+  ) {
+    operation.parameters = [
+      ...(operation.parameters || []),
+      { $ref: idempotencyReference },
+    ];
+  }
+  operation.description = `${operation.description || ""} Optional idempotency is evaluated after current authentication, authorization, and normalized validation. Successful 2xx responses are stored atomically for exact replay for seven days; conflicting payloads or an unresolved concurrent request return 409. Invalid correlation or idempotency headers return 400.`.trim();
+  operation["x-idempotency-errors"] = {
+    invalidHeaders: "400",
+    conflictingPayload: "409",
+    unresolvedInProgress: "409",
+  };
+
+  operation.responses["400"] ||= { description: "Validation failed" };
+  operation.responses["409"] ||= {
+    description: "Idempotency conflict or unresolved in-progress request",
+  };
+  mergeErrorCodes(operation.responses["400"], "x-idempotency-errors", [
+    "INVALID_CORRELATION_ID",
+    "INVALID_IDEMPOTENCY_KEY",
+  ]);
+  mergeErrorCodes(operation.responses["409"], "x-idempotency-errors", [
+    "IDEMPOTENCY_CONFLICT",
+    "IDEMPOTENCY_IN_PROGRESS",
+  ]);
+
+  for (const response of Object.values(operation.responses)) {
+    response.headers = {
+      ...(response.headers || {}),
+      ...requestContextResponseHeaders,
+      "Idempotency-Replayed": {
+        $ref: "#/components/headers/IdempotencyReplayed",
+      },
+    };
+  }
+}
 
 module.exports = swaggerSpec;

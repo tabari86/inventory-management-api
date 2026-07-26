@@ -168,9 +168,59 @@ last-write-wins. Mandatory preconditions are deferred to a versioned contract.
 
 Transaction callback state and movement calculations are attempt-local, so a
 driver callback retry does not accumulate versions or response arrays.
-Transactions still do not make requests idempotent or exactly-once.
-Idempotency, AuditEvent, OutboxEvent, request/correlation IDs, and API versioning
-are not implemented.
+
+## Request Context
+
+The first application middleware generates a new `X-Request-ID` UUID for every
+HTTP attempt and never trusts an inbound request ID. `X-Correlation-ID` accepts
+one 1-128 character value matching `^[A-Za-z0-9._:-]+$`; otherwise the request
+fails with 400. When omitted, correlation defaults to the request ID. Both
+headers are written before parsing, authentication, or routing so success and
+error paths carry them.
+
+The context passed explicitly through controllers and application services is:
+
+```text
+{ requestId, correlationId, source: "http-api", actor: { type: "user", id } }
+```
+
+Authentication supplies the actor from the validated User record. The context
+does not contain raw headers, JWTs, roles, email, or names. There is no
+AsyncLocalStorage or mutable global request state. This boundary is ready for
+future AuditEvent and OutboxEvent work, but neither event type is implemented.
+
+## Inventory Mutation Idempotency
+
+Every exposed Product, Warehouse, Stock, Goods Receipt, and Goods Issue
+mutation maps to one explicit versioned business operation ID. GET, auth, user,
+Swagger, health, and read-only StockMovement operations do not enter the
+idempotency executor.
+
+After authentication, RBAC, validation, and normalization, controllers build a
+plain command containing the operation ID, normalized path parameters,
+semantic query parameters, and normalized body. `canonical-json-v1` recursively
+sorts plain-object keys, preserves array order and JSON types, normalizes
+ObjectIds/dates, and rejects unsupported or circular values. SHA-256 hashes both
+the canonical command and the raw opaque key; the raw key is never persisted.
+
+The unique scope is `(actorType, actorId, operationId, keyHash)`. For a keyed
+original execution one transaction inserts an internal `processing` record,
+runs the session-bound domain operation and movement writes, constructs a plain
+JSON response snapshot, enforces the 1 MiB limit, and changes the record to
+`completed`. A failed transaction commits no record, and no committed `failed`
+state exists. Public service wrappers continue to own the normal transaction
+when no key is supplied; keyed execution calls the same internal work with the
+executor-owned session, avoiding nested transactions.
+
+MongoDB's unique compound index prevents concurrent duplicate commits. A loser
+resolves the committed record in at most three bounded attempts. Matching
+request hashes replay the exact status/body without another domain write;
+different hashes return 409. Authentication and RBAC always run before replay.
+Completed records expire seven days after completion through a single-field TTL
+index. TTL removal is asynchronous; until removal the stored record remains
+authoritative. Runtime auto-index creation is disabled for the record model; the
+dry-run-first migration owns production index creation. No Redis lock,
+application cleanup worker, lease, or heartbeat is used.
 
 ## Stock Aggregate Design
 

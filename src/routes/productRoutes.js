@@ -24,6 +24,8 @@ const {
 } = require("../controllers/productController");
 const { authenticateUser } = require("../middleware/authMiddleware");
 const { authorizeRoles } = require("../middleware/roleMiddleware");
+const { bindInventoryOperation } = require("../middleware/inventoryIdempotency");
+const { operations } = require("../services/inventoryOperationRegistry");
 
 const router = express.Router();
 
@@ -123,6 +125,7 @@ router.post(
   authorizeRoles("admin", "manager"),
   createBulkProductsValidation,
   validateRequest,
+  bindInventoryOperation(operations.PRODUCT_BULK_CREATE),
   createProductsBulk
 );
 
@@ -207,6 +210,7 @@ router.patch(
   authorizeRoles("admin", "manager"),
   updateBulkProductsValidation,
   validateRequest,
+  bindInventoryOperation(operations.PRODUCT_BULK_UPDATE),
   updateProductsBulk
 );
 
@@ -265,6 +269,7 @@ router.delete(
   authorizeRoles("admin"),
   deleteBulkProductsValidation,
   validateRequest,
+  bindInventoryOperation(operations.PRODUCT_BULK_ARCHIVE),
   deleteProductsBulk
 );
 
@@ -367,6 +372,7 @@ router.post(
   authorizeRoles("admin", "manager"),
   createProductValidation,
   validateRequest,
+  bindInventoryOperation(operations.PRODUCT_CREATE),
   createProduct
 );
 
@@ -445,6 +451,7 @@ router.patch(
   authorizeRoles("admin", "manager"),
   updateProductValidation,
   validateRequest,
+  bindInventoryOperation(operations.PRODUCT_UPDATE),
   updateProduct
 );
 
@@ -500,6 +507,7 @@ router.patch(
   authorizeRoles("admin", "manager"),
   deactivateProductValidation,
   validateRequest,
+  bindInventoryOperation(operations.PRODUCT_DEACTIVATE),
   deactivateProduct
 );
 
@@ -556,6 +564,7 @@ router.delete(
   authorizeRoles("admin"),
   archiveProductValidation,
   validateRequest,
+  bindInventoryOperation(operations.PRODUCT_ARCHIVE),
   deleteProduct
 );
 

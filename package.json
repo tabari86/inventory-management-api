@@ -8,6 +8,7 @@
     "dev": "nodemon src/server.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "migrate:phase1-lifecycle": "node scripts/migrations/phase1LifecycleVersion.js",
+    "migrate:phase1-idempotency": "node scripts/migrations/phase1IdempotencyIndexes.js",
     "test": "jest --runInBand"
   },
   "keywords": [

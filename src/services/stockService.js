@@ -139,67 +139,66 @@ const touchActiveParents = async ({ products, warehouses, session }) => {
   }
 };
 
-const createStocksInTransaction = async ({ stocksToCreate, single }) =>
-  withTransaction(async (session) => {
-    const productIds = [
-      ...new Set(stocksToCreate.map(({ productId }) => normalizeId(productId))),
-    ];
-    const warehouseIds = [
-      ...new Set(
-        stocksToCreate.map(({ warehouseId }) => normalizeId(warehouseId))
-      ),
-    ];
+const createStocksInSession = async ({ stocksToCreate, single, session }) => {
+  const productIds = [
+    ...new Set(stocksToCreate.map(({ productId }) => normalizeId(productId))),
+  ];
+  const warehouseIds = [
+    ...new Set(
+      stocksToCreate.map(({ warehouseId }) => normalizeId(warehouseId))
+    ),
+  ];
 
-    const products = await Product.find({ _id: { $in: productIds } }).session(
-      session
+  const products = await Product.find({ _id: { $in: productIds } }).session(
+    session
+  );
+  const warehouses = await Warehouse.find({
+    _id: { $in: warehouseIds },
+  }).session(session);
+
+  validateParents({ products, warehouses, productIds, warehouseIds });
+
+  const existingStock = await Stock.findOne({
+    $or: stocksToCreate.map(({ productId, warehouseId }) => ({
+      productId,
+      warehouseId,
+    })),
+  }).session(session);
+
+  if (existingStock) {
+    throw createDomainError(
+      errorCodes.DUPLICATE_RESOURCE,
+      409,
+      single
+        ? "Stock record already exists for this product and warehouse"
+        : "One or more stock records already exist"
     );
-    const warehouses = await Warehouse.find({
-      _id: { $in: warehouseIds },
-    }).session(session);
+  }
 
-    validateParents({ products, warehouses, productIds, warehouseIds });
+  // This conditional write makes parent lifecycle changes conflict with the
+  // relationship creation. One version increment represents this command's
+  // relationship change for each distinct parent aggregate.
+  await touchActiveParents({ products, warehouses, session });
 
-    const existingStock = await Stock.findOne({
-      $or: stocksToCreate.map(({ productId, warehouseId }) => ({
-        productId,
-        warehouseId,
-      })),
-    }).session(session);
+  const stocks = await Stock.create(
+    stocksToCreate.map(({ productId, warehouseId }) => ({
+      productId,
+      warehouseId,
+      quantity: 0,
+      version: 1,
+      productLifecycleStatus: "active",
+      warehouseLifecycleStatus: "active",
+    })),
+    { session, ordered: true }
+  );
 
-    if (existingStock) {
-      throw createDomainError(
-        errorCodes.DUPLICATE_RESOURCE,
-        409,
-        single
-          ? "Stock record already exists for this product and warehouse"
-          : "One or more stock records already exist"
-      );
-    }
-
-    // This conditional write makes parent lifecycle changes conflict with the
-    // relationship creation. One version increment represents this command's
-    // relationship change for each distinct parent aggregate.
-    await touchActiveParents({ products, warehouses, session });
-
-    const stocks = await Stock.create(
-      stocksToCreate.map(({ productId, warehouseId }) => ({
-        productId,
-        warehouseId,
-        quantity: 0,
-        version: 1,
-        productLifecycleStatus: "active",
-        warehouseLifecycleStatus: "active",
-      })),
-      { session, ordered: true }
-    );
-
-    return single
-      ? stocks[0]
-      : {
-          createdCount: stocks.length,
-          stocks,
-        };
-  });
+  return single
+    ? stocks[0]
+    : {
+        createdCount: stocks.length,
+        stocks,
+      };
+};
 
 const convertDuplicateError = (error, single) => {
   if (error instanceof DomainError) throw error;
@@ -218,20 +217,23 @@ const convertDuplicateError = (error, single) => {
   throw error;
 };
 
-const createStock = async ({ productId, warehouseId }) => {
+const createStock = async ({ productId, warehouseId, session }) => {
   assertStockIds({ productId, warehouseId });
 
   try {
-    return await createStocksInTransaction({
-      stocksToCreate: [{ productId, warehouseId }],
-      single: true,
-    });
+    const execute = (currentSession) =>
+      createStocksInSession({
+        stocksToCreate: [{ productId, warehouseId }],
+        single: true,
+        session: currentSession,
+      });
+    return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
     return convertDuplicateError(error, true);
   }
 };
 
-const createStocksBulk = async ({ stocks: stocksToCreate }) => {
+const createStocksBulk = async ({ stocks: stocksToCreate, session }) => {
   for (const stock of stocksToCreate) assertStockIds(stock);
 
   const combinations = stocksToCreate.map(
@@ -248,7 +250,13 @@ const createStocksBulk = async ({ stocks: stocksToCreate }) => {
   }
 
   try {
-    return await createStocksInTransaction({ stocksToCreate, single: false });
+    const execute = (currentSession) =>
+      createStocksInSession({
+        stocksToCreate,
+        single: false,
+        session: currentSession,
+      });
+    return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
     return convertDuplicateError(error, false);
   }

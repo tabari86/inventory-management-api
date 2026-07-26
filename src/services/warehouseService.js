@@ -167,11 +167,106 @@ const updateWarehouseInSession = async ({
   return updatedWarehouse;
 };
 
-const updateWarehouse = async ({ warehouseId, update, actorId }) => {
+const createWarehouse = async ({
+  code,
+  name,
+  description,
+  status,
+  session,
+}) => {
+  const normalizedCode = code.toUpperCase();
+  const existingWarehouseQuery = Warehouse.findOne({ code: normalizedCode });
+  if (session) existingWarehouseQuery.session(session);
+  const existingWarehouse = await existingWarehouseQuery;
+
+  if (existingWarehouse) {
+    throw createDomainError(
+      errorCodes.DUPLICATE_RESOURCE,
+      409,
+      "A warehouse with this code already exists"
+    );
+  }
+
+  const warehouseData = {
+    code: normalizedCode,
+    name,
+    description,
+    status,
+  };
+
+  try {
+    if (!session) return await Warehouse.create(warehouseData);
+    const [warehouse] = await Warehouse.create([warehouseData], { session });
+    return warehouse;
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    if (error.code === 11000) {
+      throw createDomainError(
+        errorCodes.DUPLICATE_RESOURCE,
+        409,
+        "A warehouse with this code already exists"
+      );
+    }
+    throw error;
+  }
+};
+
+const createWarehousesBulk = async ({ warehouses: input, session }) => {
+  const warehousesToCreate = input.map((warehouse) => ({
+    ...warehouse,
+    code: warehouse.code.toUpperCase(),
+  }));
+  const codes = warehousesToCreate.map((warehouse) => warehouse.code);
+
+  if (new Set(codes).size !== codes.length) {
+    throw createDomainError(
+      errorCodes.VALIDATION_FAILED,
+      400,
+      "Duplicate warehouse codes are not allowed in the same request"
+    );
+  }
+
+  const existingWarehouseQuery = Warehouse.findOne({ code: { $in: codes } });
+  if (session) existingWarehouseQuery.session(session);
+  const existingWarehouse = await existingWarehouseQuery;
+
+  if (existingWarehouse) {
+    throw createDomainError(
+      errorCodes.DUPLICATE_RESOURCE,
+      409,
+      "One or more warehouse codes already exist"
+    );
+  }
+
+  try {
+    const warehouses = await Warehouse.insertMany(
+      warehousesToCreate,
+      session ? { session } : undefined
+    );
+    return {
+      createdCount: warehouses.length,
+      warehouses,
+    };
+  } catch (error) {
+    if (error instanceof DomainError) throw error;
+    if (error.code === 11000) {
+      throw createDomainError(
+        errorCodes.DUPLICATE_RESOURCE,
+        409,
+        "One or more warehouse codes already exist"
+      );
+    }
+    throw error;
+  }
+};
+
+const updateWarehouse = async ({ warehouseId, update, actorId, session }) => {
   assertObjectId(warehouseId);
 
-  return withTransaction(async (session) => {
-    const warehouse = await Warehouse.findById(warehouseId).session(session);
+  const execute = async (currentSession) => {
+    const warehouse = await Warehouse.findById(warehouseId).session(
+      currentSession
+    );
 
     if (!warehouse) {
       throw createDomainError(
@@ -181,11 +276,18 @@ const updateWarehouse = async ({ warehouseId, update, actorId }) => {
       );
     }
 
-    return updateWarehouseInSession({ warehouse, update, actorId, session });
-  });
+    return updateWarehouseInSession({
+      warehouse,
+      update,
+      actorId,
+      session: currentSession,
+    });
+  };
+
+  return session ? execute(session) : withTransaction(execute);
 };
 
-const updateWarehousesBulk = async ({ updates, actorId }) => {
+const updateWarehousesBulk = async ({ updates, actorId, session }) => {
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -197,9 +299,9 @@ const updateWarehousesBulk = async ({ updates, actorId }) => {
     );
   }
 
-  return withTransaction(async (session) => {
+  const execute = async (currentSession) => {
     const warehouses = await Warehouse.find({ _id: { $in: ids } }).session(
-      session
+      currentSession
     );
 
     if (warehouses.length !== ids.length) {
@@ -221,7 +323,7 @@ const updateWarehousesBulk = async ({ updates, actorId }) => {
           warehouse: warehouseById.get(normalizeId(update.id)),
           update,
           actorId,
-          session,
+          session: currentSession,
         })
       );
     }
@@ -230,7 +332,9 @@ const updateWarehousesBulk = async ({ updates, actorId }) => {
       updatedCount: updatedWarehouses.length,
       warehouses: updatedWarehouses,
     };
-  });
+  };
+
+  return session ? execute(session) : withTransaction(execute);
 };
 
 const deactivateWarehouse = ({
@@ -238,14 +342,18 @@ const deactivateWarehouse = ({
   actorId,
   expectedVersion,
   deactivationReason,
+  session,
 }) =>
   updateWarehouse({
     warehouseId,
     actorId,
+    session,
     update: { status: "inactive", expectedVersion, deactivationReason },
   });
 
 module.exports = {
+  createWarehouse,
+  createWarehousesBulk,
   updateWarehouse,
   updateWarehousesBulk,
   deactivateWarehouse,

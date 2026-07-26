@@ -20,6 +20,8 @@ const {
 } = require("../controllers/warehouseController");
 const { authenticateUser } = require("../middleware/authMiddleware");
 const { authorizeRoles } = require("../middleware/roleMiddleware");
+const { bindInventoryOperation } = require("../middleware/inventoryIdempotency");
+const { operations } = require("../services/inventoryOperationRegistry");
 
 const router = express.Router();
 
@@ -115,6 +117,7 @@ router.post(
   authorizeRoles("admin", "manager"),
   createBulkWarehousesValidation,
   validateRequest,
+  bindInventoryOperation(operations.WAREHOUSE_BULK_CREATE),
   createWarehousesBulk
 );
 
@@ -190,6 +193,7 @@ router.patch(
   authorizeRoles("admin", "manager"),
   updateBulkWarehousesValidation,
   validateRequest,
+  bindInventoryOperation(operations.WAREHOUSE_BULK_UPDATE),
   updateWarehousesBulk
 );
 
@@ -288,6 +292,7 @@ router.post(
   authorizeRoles("admin", "manager"),
   createWarehouseValidation,
   validateRequest,
+  bindInventoryOperation(operations.WAREHOUSE_CREATE),
   createWarehouse
 );
 
@@ -357,6 +362,7 @@ router.patch(
   authorizeRoles("admin", "manager"),
   updateWarehouseValidation,
   validateRequest,
+  bindInventoryOperation(operations.WAREHOUSE_UPDATE),
   updateWarehouse
 );
 
@@ -412,6 +418,7 @@ router.patch(
   authorizeRoles("admin", "manager"),
   deactivateWarehouseValidation,
   validateRequest,
+  bindInventoryOperation(operations.WAREHOUSE_DEACTIVATE),
   deactivateWarehouse
 );
 

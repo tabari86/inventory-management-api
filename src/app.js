@@ -4,6 +4,7 @@ const swaggerUi = require("swagger-ui-express");
 
 const swaggerSpec = require("./config/swagger");
 const errorHandler = require("./middleware/errorHandler");
+const { requestContext } = require("./middleware/requestContext");
 
 const productRoutes = require("./routes/productRoutes");
 const warehouseRoutes = require("./routes/warehouseRoutes");
@@ -18,6 +19,7 @@ const app = express();
 
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
+app.use(requestContext);
 app.use(
   helmet({
     contentSecurityPolicy: {

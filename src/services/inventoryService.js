@@ -212,10 +212,13 @@ const updateStockForMovement = async ({ stock, quantity, type, session }) => {
   return updatedStock;
 };
 
-const createGoodsReceipt = async ({ stockId, quantity, reference, reason }) => {
-  validateSingleInventoryInput({ stockId, quantity });
-
-  return withTransaction(async (session) => {
+const createGoodsReceiptInSession = async ({
+  stockId,
+  quantity,
+  reference,
+  reason,
+  session,
+}) => {
     const { stock, product, warehouse } = await loadSingleInventoryContext({
       stockId,
       session,
@@ -254,13 +257,35 @@ const createGoodsReceipt = async ({ stockId, quantity, reference, reason }) => {
       stock: updatedStock,
       stockMovement,
     };
-  });
 };
 
-const createGoodsIssue = async ({ stockId, quantity, reference, reason }) => {
+const createGoodsReceipt = async ({
+  stockId,
+  quantity,
+  reference,
+  reason,
+  session,
+}) => {
   validateSingleInventoryInput({ stockId, quantity });
 
-  return withTransaction(async (session) => {
+  const execute = (currentSession) =>
+    createGoodsReceiptInSession({
+      stockId,
+      quantity,
+      reference,
+      reason,
+      session: currentSession,
+    });
+  return session ? execute(session) : withTransaction(execute);
+};
+
+const createGoodsIssueInSession = async ({
+  stockId,
+  quantity,
+  reference,
+  reason,
+  session,
+}) => {
     const { stock, product, warehouse } = await loadSingleInventoryContext({
       stockId,
       session,
@@ -307,14 +332,32 @@ const createGoodsIssue = async ({ stockId, quantity, reference, reason }) => {
       stock: updatedStock,
       stockMovement,
     };
-  });
 };
 
-const createBulkInventoryMutation = async ({ items, type }) => {
+const createGoodsIssue = async ({
+  stockId,
+  quantity,
+  reference,
+  reason,
+  session,
+}) => {
+  validateSingleInventoryInput({ stockId, quantity });
+
+  const execute = (currentSession) =>
+    createGoodsIssueInSession({
+      stockId,
+      quantity,
+      reference,
+      reason,
+      session: currentSession,
+    });
+  return session ? execute(session) : withTransaction(execute);
+};
+
+const createBulkInventoryMutationInSession = async ({ items, type, session }) => {
   const quantityByStockId = new Map();
 
   for (const item of items) {
-    validateSingleInventoryInput(item);
     const stockId = item.stockId.toLowerCase();
     const currentQuantity = quantityByStockId.get(stockId) || 0;
     quantityByStockId.set(stockId, currentQuantity + item.quantity);
@@ -322,117 +365,129 @@ const createBulkInventoryMutation = async ({ items, type }) => {
 
   const stockIds = [...quantityByStockId.keys()];
 
-  return withTransaction(async (session) => {
-    const stocks = await Stock.find({ _id: { $in: stockIds } })
-      .session(session)
-      .lean();
+  const stocks = await Stock.find({ _id: { $in: stockIds } })
+    .session(session)
+    .lean();
 
-    if (stocks.length !== stockIds.length) {
+  if (stocks.length !== stockIds.length) {
+    throw createDomainError(
+      errorCodes.RESOURCE_NOT_FOUND,
+      404,
+      "One or more stock records were not found"
+    );
+  }
+
+  const productIds = [
+    ...new Set(stocks.map((stock) => stock.productId.toString())),
+  ];
+  const warehouseIds = [
+    ...new Set(stocks.map((stock) => stock.warehouseId.toString())),
+  ];
+  const products = await Product.find({ _id: { $in: productIds } }).session(
+    session
+  );
+  const warehouses = await Warehouse.find({
+    _id: { $in: warehouseIds },
+  }).session(session);
+
+  const productById = new Map(
+    products.map((product) => [product._id.toString(), product])
+  );
+  const warehouseById = new Map(
+    warehouses.map((warehouse) => [warehouse._id.toString(), warehouse])
+  );
+  const stockById = new Map(
+    stocks.map((stock) => [stock._id.toString(), stock])
+  );
+
+  for (const stock of stocks) {
+    validateInventoryContext({
+      stock,
+      product: productById.get(stock.productId.toString()),
+      warehouse: warehouseById.get(stock.warehouseId.toString()),
+      type,
+      bulk: true,
+    });
+  }
+
+  if (type === "GOODS_ISSUE") {
+    const hasInsufficientStock = [...quantityByStockId].some(
+      ([stockId, quantity]) => stockById.get(stockId).quantity < quantity
+    );
+
+    if (hasInsufficientStock) {
       throw createDomainError(
-        errorCodes.RESOURCE_NOT_FOUND,
-        404,
-        "One or more stock records were not found"
+        errorCodes.INSUFFICIENT_STOCK,
+        409,
+        "Not enough stock available"
       );
     }
+  }
 
-    const productIds = [
-      ...new Set(stocks.map((stock) => stock.productId.toString())),
-    ];
-    const warehouseIds = [
-      ...new Set(stocks.map((stock) => stock.warehouseId.toString())),
-    ];
-    const products = await Product.find({ _id: { $in: productIds } }).session(
-      session
-    );
-    const warehouses = await Warehouse.find({
-      _id: { $in: warehouseIds },
-    }).session(session);
+  const movementDocuments = [];
 
-    const productById = new Map(
-      products.map((product) => [product._id.toString(), product])
-    );
-    const warehouseById = new Map(
-      warehouses.map((warehouse) => [warehouse._id.toString(), warehouse])
-    );
-    const stockById = new Map(
-      stocks.map((stock) => [stock._id.toString(), stock])
-    );
-
-    for (const stock of stocks) {
-      validateInventoryContext({
-        stock,
-        product: productById.get(stock.productId.toString()),
-        warehouse: warehouseById.get(stock.warehouseId.toString()),
-        type,
-        bulk: true,
-      });
-    }
-
-    if (type === "GOODS_ISSUE") {
-      const hasInsufficientStock = [...quantityByStockId].some(
-        ([stockId, quantity]) => stockById.get(stockId).quantity < quantity
-      );
-
-      if (hasInsufficientStock) {
-        throw createDomainError(
-          errorCodes.INSUFFICIENT_STOCK,
-          409,
-          "Not enough stock available"
-        );
-      }
-    }
-
-    const movementDocuments = [];
-
-    for (const item of items) {
-      const stockId = item.stockId.toLowerCase();
-      const stock = stockById.get(stockId);
-      const product = productById.get(stock.productId.toString());
-      const warehouse = warehouseById.get(stock.warehouseId.toString());
-      const updatedStock = await updateStockForMovement({
-        stock,
-        quantity: item.quantity,
-        type,
-        session,
-      });
-
-      movementDocuments.push(
-        createMovementDocument({
-          item,
-          stock,
-          product,
-          warehouse,
-          type,
-          quantityBefore: stock.quantity,
-          quantityAfter: updatedStock.quantity,
-          aggregateVersion: updatedStock.version,
-        })
-      );
-      stockById.set(stockId, updatedStock);
-    }
-
-    const stockMovements = await StockMovement.insertMany(movementDocuments, {
+  for (const item of items) {
+    const stockId = item.stockId.toLowerCase();
+    const stock = stockById.get(stockId);
+    const product = productById.get(stock.productId.toString());
+    const warehouse = warehouseById.get(stock.warehouseId.toString());
+    const updatedStock = await updateStockForMovement({
+      stock,
+      quantity: item.quantity,
+      type,
       session,
     });
 
-    return {
-      processedCount: stockMovements.length,
-      stockMovements,
-      updatedStocks: stockIds.map((stockId) => stockById.get(stockId)),
-    };
+    movementDocuments.push(
+      createMovementDocument({
+        item,
+        stock,
+        product,
+        warehouse,
+        type,
+        quantityBefore: stock.quantity,
+        quantityAfter: updatedStock.quantity,
+        aggregateVersion: updatedStock.version,
+      })
+    );
+    stockById.set(stockId, updatedStock);
+  }
+
+  const stockMovements = await StockMovement.insertMany(movementDocuments, {
+    session,
   });
+
+  return {
+    processedCount: stockMovements.length,
+    stockMovements,
+    updatedStocks: stockIds.map((stockId) => stockById.get(stockId)),
+  };
 };
 
-const createGoodsReceiptsBulk = async ({ receipts }) =>
+const createBulkInventoryMutation = ({ items, type, session }) => {
+  for (const item of items) validateSingleInventoryInput(item);
+
+  const execute = (currentSession) =>
+    createBulkInventoryMutationInSession({
+      items,
+      type,
+      session: currentSession,
+    });
+  return session ? execute(session) : withTransaction(execute);
+};
+
+const createGoodsReceiptsBulk = async ({ receipts, session }) =>
   createBulkInventoryMutation({
     items: receipts,
     type: "GOODS_RECEIPT",
+    session,
   });
 
-const createGoodsIssuesBulk = async ({ issues }) =>
+const createGoodsIssuesBulk = async ({ issues, session }) =>
   createBulkInventoryMutation({
     items: issues,
     type: "GOODS_ISSUE",
+    session,
   });
 
 module.exports = {

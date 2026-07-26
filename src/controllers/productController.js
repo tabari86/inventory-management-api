@@ -1,6 +1,17 @@
-const Product = require("../models/Product");
 const mongoose = require("mongoose");
+const Product = require("../models/Product");
 const productService = require("../services/productService");
+const { sendInventoryMutation } = require("../services/idempotencyExecutor");
+const { buildCanonicalCommand } = require("../utils/canonicalJson");
+
+const normalizeId = (id) => String(id).toLowerCase();
+const commandFor = (req, normalizedBody, pathParameters = {}) =>
+  buildCanonicalCommand({
+    operationId: req.inventoryOperation.operationId,
+    pathParameters,
+    semanticQueryParameters: {},
+    normalizedBody,
+  });
 
 const createProduct = async (req, res, next) => {
   try {
@@ -12,25 +23,23 @@ const createProduct = async (req, res, next) => {
       });
     }
 
-    const existingProduct = await Product.findOne({ sku });
+    const input = { sku, name, description, unit, status };
 
-    if (existingProduct) {
-      return res.status(409).json({
-        message: "A product with this SKU already exists",
-      });
-    }
-
-    const product = await Product.create({
-      sku,
-      name,
-      description,
-      unit,
-      status,
-    });
-
-    return res.status(201).json({
-      message: "Product created successfully",
-      data: product,
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 201,
+      command: commandFor(req, input),
+      execute: ({ session }) =>
+        productService.createProduct({
+          ...input,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (product) => ({
+        message: "Product created successfully",
+        data: product,
+      }),
     });
   } catch (error) {
     error.message = "Could not create product";
@@ -49,39 +58,24 @@ const createProductsBulk = async (req, res, next) => {
         status,
       })
     );
-    const skus = productsToCreate.map((product) => product.sku);
-
-    if (new Set(skus).size !== skus.length) {
-      return res.status(400).json({
-        message: "Duplicate SKUs are not allowed in the same request",
-      });
-    }
-
-    const existingProduct = await Product.findOne({ sku: { $in: skus } });
-
-    if (existingProduct) {
-      return res.status(409).json({
-        message: "One or more product SKUs already exist",
-      });
-    }
-
-    const products = await Product.insertMany(productsToCreate);
-
-    return res.status(201).json({
-      message: "Products created successfully",
-      data: {
-        createdCount: products.length,
-        products,
-      },
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 201,
+      command: commandFor(req, productsToCreate),
+      execute: ({ session }) =>
+        productService.createProductsBulk({
+          products: productsToCreate,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (data) => ({
+        message: "Products created successfully",
+        data,
+      }),
     });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({
-        message: "One or more product SKUs already exist",
-      });
-    }
-
-    error.message = "Could not create products";
+    error.clientMessage = "Could not create products";
     next(error);
   }
 };
@@ -109,14 +103,25 @@ const updateProductsBulk = async (req, res, next) => {
         deactivationReason,
       })
     );
-    const data = await productService.updateProductsBulk({
-      updates,
-      actorId: req.user.id,
-    });
-
-    return res.status(200).json({
-      message: "Products updated successfully",
-      data,
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(
+        req,
+        updates.map((update) => ({ ...update, id: normalizeId(update.id) }))
+      ),
+      execute: ({ session }) =>
+        productService.updateProductsBulk({
+          updates,
+          actorId: req.user.id,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (data) => ({
+        message: "Products updated successfully",
+        data,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not update products";
@@ -126,14 +131,23 @@ const updateProductsBulk = async (req, res, next) => {
 
 const deleteProductsBulk = async (req, res, next) => {
   try {
-    const data = await productService.archiveProductsBulk({
-      ids: req.body.ids,
-      actorId: req.user.id,
-    });
-
-    return res.status(200).json({
-      message: "Products deleted successfully",
-      data,
+    const ids = req.body.ids;
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(req, { ids: ids.map(normalizeId) }),
+      execute: ({ session }) =>
+        productService.archiveProductsBulk({
+          ids,
+          actorId: req.user.id,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (data) => ({
+        message: "Products deleted successfully",
+        data,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not delete products";
@@ -197,23 +211,32 @@ const updateProduct = async (req, res, next) => {
       expectedVersion,
       deactivationReason,
     } = req.body;
-    const updatedProduct = await productService.updateProduct({
-      productId: id,
-      actorId: req.user.id,
-      update: {
-        sku,
-        name,
-        description,
-        unit,
-        status,
-        expectedVersion,
-        deactivationReason,
-      },
-    });
-
-    return res.status(200).json({
-      message: "Product updated successfully",
-      data: updatedProduct,
+    const update = {
+      sku,
+      name,
+      description,
+      unit,
+      status,
+      expectedVersion,
+      deactivationReason,
+    };
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(req, update, { id: normalizeId(id) }),
+      execute: ({ session }) =>
+        productService.updateProduct({
+          productId: id,
+          actorId: req.user.id,
+          update,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (updatedProduct) => ({
+        message: "Product updated successfully",
+        data: updatedProduct,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not update product";
@@ -224,16 +247,27 @@ const updateProduct = async (req, res, next) => {
 const deactivateProduct = async (req, res, next) => {
   try {
     const body = req.body || {};
-    const updatedProduct = await productService.deactivateProduct({
-      productId: req.params.id,
-      actorId: req.user.id,
+    const input = {
       expectedVersion: body.expectedVersion,
       deactivationReason: body.deactivationReason,
-    });
-
-    return res.status(200).json({
-      message: "Product deactivated successfully",
-      data: updatedProduct,
+    };
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(req, input, { id: normalizeId(req.params.id) }),
+      execute: ({ session }) =>
+        productService.deactivateProduct({
+          productId: req.params.id,
+          actorId: req.user.id,
+          ...input,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: (updatedProduct) => ({
+        message: "Product deactivated successfully",
+        data: updatedProduct,
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not deactivate product";
@@ -244,15 +278,26 @@ const deactivateProduct = async (req, res, next) => {
 const deleteProduct = async (req, res, next) => {
   try {
     const body = req.body || {};
-    await productService.archiveProduct({
-      productId: req.params.id,
-      actorId: req.user.id,
+    const input = {
       expectedVersion: body.expectedVersion,
       archiveReason: body.archiveReason,
-    });
-
-    return res.status(200).json({
-      message: "Product deleted successfully",
+    };
+    return sendInventoryMutation({
+      req,
+      res,
+      statusCode: 200,
+      command: commandFor(req, input, { id: normalizeId(req.params.id) }),
+      execute: ({ session }) =>
+        productService.archiveProduct({
+          productId: req.params.id,
+          actorId: req.user.id,
+          ...input,
+          session,
+          context: req.applicationContext,
+        }),
+      buildResponse: () => ({
+        message: "Product deleted successfully",
+      }),
     });
   } catch (error) {
     error.clientMessage = "Could not delete product";

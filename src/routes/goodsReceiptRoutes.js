@@ -19,6 +19,8 @@ const {
 const {
   authorizeRoles,
 } = require("../middleware/roleMiddleware");
+const { bindInventoryOperation } = require("../middleware/inventoryIdempotency");
+const { operations } = require("../services/inventoryOperationRegistry");
 
 const router = express.Router();
 
@@ -87,6 +89,7 @@ router.post(
   authorizeRoles("admin", "manager"),
   createBulkGoodsReceiptValidation,
   validateRequest,
+  bindInventoryOperation(operations.GOODS_RECEIPT_BULK),
   createGoodsReceiptsBulk
 );
 
@@ -148,6 +151,7 @@ router.post(
   authorizeRoles("admin", "manager"),
   createGoodsReceiptValidation,
   validateRequest,
+  bindInventoryOperation(operations.GOODS_RECEIPT_SINGLE),
   createGoodsReceipt
 );
 

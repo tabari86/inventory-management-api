@@ -1,4 +1,7 @@
 const SwaggerParser = require("@apidevtools/swagger-parser");
+const {
+  mutationOperationRegistry,
+} = require("../src/services/inventoryOperationRegistry");
 
 const defaultProductionUrl =
   "https://inventory-management-api-6zuo.onrender.com";
@@ -11,6 +14,34 @@ const loadSwaggerSpec = () => {
 
 delete process.env.SWAGGER_PRODUCTION_URL;
 const swaggerSpec = loadSwaggerSpec();
+
+const httpMethods = new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "options",
+  "head",
+]);
+
+const parameterName = (parameter) => {
+  if (parameter.name) return parameter.name;
+  if (parameter.$ref === "#/components/parameters/CorrelationId") {
+    return "X-Correlation-ID";
+  }
+  if (parameter.$ref === "#/components/parameters/IdempotencyKey") {
+    return "Idempotency-Key";
+  }
+  return parameter.$ref;
+};
+
+const documentedOperations = () =>
+  Object.entries(swaggerSpec.paths).flatMap(([path, pathItem]) =>
+    Object.entries(pathItem)
+      .filter(([method]) => httpMethods.has(method))
+      .map(([method, operation]) => ({ method, path, operation }))
+  );
 
 const protectedOperations = [
   ["get", "/api/auth/me"],
@@ -73,6 +104,132 @@ describe("Swagger/OpenAPI specification", () => {
     expect(swaggerSpec.components.securitySchemes.bearerAuth).toBeDefined();
   });
 
+  it("defines the exact reusable incoming correlation parameter contract", () => {
+    const parameter = swaggerSpec.components.parameters.CorrelationId;
+
+    expect(parameter).toMatchObject({
+      name: "X-Correlation-ID",
+      in: "header",
+      required: false,
+      schema: {
+        type: "string",
+        minLength: 1,
+        maxLength: 128,
+        pattern: "^[A-Za-z0-9._:-]+$",
+      },
+    });
+    expect(parameter.description).toContain("caller-provided operation chain");
+    expect(parameter.description).toContain("echoed");
+    expect(parameter.description).toContain("server-generated request ID");
+    expect(parameter.description).toContain("Invalid values return 400");
+    expect(parameter.description).toContain(
+      "does not define idempotency identity"
+    );
+    expect(parameter.description).toContain(
+      "changing it does not prevent same-payload replay"
+    );
+  });
+
+  it("documents incoming correlation, but never incoming request ID, on every operation", () => {
+    for (const { method, path, operation } of documentedOperations()) {
+      const parameters = operation.parameters || [];
+      const correlationParameters = parameters.filter(
+        (parameter) => parameterName(parameter) === "X-Correlation-ID"
+      );
+
+      expect(correlationParameters).toHaveLength(1);
+      expect(correlationParameters[0]).toMatchObject({ required: false });
+      expect(parameters.map(parameterName)).not.toContain("X-Request-ID");
+      expect(operation).toBe(swaggerSpec.paths[path][method]);
+    }
+    expect(swaggerSpec.components.parameters.XRequestId).toBeUndefined();
+  });
+
+  it("documents invalid-correlation 400 responses on every operation", () => {
+    for (const { operation } of documentedOperations()) {
+      const response = operation.responses["400"];
+
+      expect(response).toBeDefined();
+      expect(response["x-request-context-errors"]).toContain(
+        "INVALID_CORRELATION_ID"
+      );
+      expect(
+        response["x-request-context-errors"].filter(
+          (code) => code === "INVALID_CORRELATION_ID"
+        )
+      ).toHaveLength(1);
+      expect(response.headers).toEqual(
+        expect.objectContaining({
+          "X-Request-ID": expect.objectContaining({
+            schema: { type: "string", format: "uuid" },
+          }),
+          "X-Correlation-ID": expect.objectContaining({
+            schema: expect.objectContaining({ type: "string" }),
+          }),
+        })
+      );
+    }
+  });
+
+  it.each([
+    ["/api/products", "get"],
+    ["/api/warehouses", "get"],
+    ["/api/stocks", "get"],
+    ["/api/stock-movements", "get"],
+  ])("adds an ErrorResponse-compatible correlation 400 to %s %s", (path, method) => {
+    const specWithRefs = loadSwaggerSpec();
+    const response = specWithRefs.paths[path][method].responses["400"];
+
+    expect(response).toMatchObject({
+      description: "Invalid X-Correlation-ID header",
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/ErrorResponse" },
+        },
+      },
+      "x-request-context-errors": ["INVALID_CORRELATION_ID"],
+    });
+  });
+
+  it("preserves existing validation and invalid-ID 400 response contracts", () => {
+    const specWithRefs = loadSwaggerSpec();
+    const productCreate = specWithRefs.paths["/api/products"].post.responses["400"];
+    const productById =
+      specWithRefs.paths["/api/products/{id}"].get.responses["400"];
+    const userCreate = specWithRefs.paths["/api/users"].post.responses["400"];
+
+    expect(productCreate.description).toBe("Validation failed");
+    expect(productCreate.content).toBeUndefined();
+    expect(productCreate["x-request-context-errors"]).toEqual([
+      "INVALID_CORRELATION_ID",
+    ]);
+    expect(productById.description).toBe("Invalid product ID");
+    expect(productById.content).toBeUndefined();
+    expect(productById["x-request-context-errors"]).toEqual([
+      "INVALID_CORRELATION_ID",
+    ]);
+    expect(userCreate).toMatchObject({
+      description: "Validation failed",
+      content: {
+        "application/json": {
+          schema: {
+            $ref: "#/components/schemas/ValidationErrorResponse",
+          },
+        },
+      },
+      "x-request-context-errors": ["INVALID_CORRELATION_ID"],
+    });
+  });
+
+  it("does not duplicate operation parameters", () => {
+    for (const { operation } of documentedOperations()) {
+      const identities = (operation.parameters || []).map((parameter) =>
+        parameter.$ref || `${parameter.in}:${parameterName(parameter)}`
+      );
+      expect(new Set(identities).size).toBe(identities.length);
+    }
+  });
+
   it("lists local and Render production servers", () => {
     const serverUrls = swaggerSpec.servers.map((server) => server.url);
 
@@ -115,6 +272,17 @@ describe("Swagger/OpenAPI specification", () => {
     ).toBeUndefined();
   });
 
+  it("does not introduce future API, event, worker, or webhook contracts", () => {
+    const serializedSpec = JSON.stringify(swaggerSpec);
+
+    expect(Object.keys(swaggerSpec.paths)).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/^\/api\/v1(?:\/|$)/)])
+    );
+    expect(serializedSpec).not.toMatch(
+      /AuditEvent|OutboxEvent|AsyncLocalStorage|Redis|webhook|worker/i
+    );
+  });
+
   it("keeps stock movement paths read-only", () => {
     expect(Object.keys(swaggerSpec.paths["/api/stock-movements"])).toEqual([
       "get",
@@ -141,6 +309,14 @@ describe("Swagger/OpenAPI specification", () => {
   it("documents the inactive-account response for the current-user endpoint", () => {
     expect(swaggerSpec.paths["/api/auth/me"].get.responses["403"]).toEqual({
       description: "User account is inactive",
+      headers: {
+        "X-Request-ID": expect.objectContaining({
+          schema: { type: "string", format: "uuid" },
+        }),
+        "X-Correlation-ID": expect.objectContaining({
+          schema: expect.objectContaining({ type: "string", maxLength: 128 }),
+        }),
+      },
     });
   });
 
@@ -333,5 +509,113 @@ describe("Swagger/OpenAPI specification", () => {
         BulkGoodsIssueResponse: expect.any(Object),
       })
     );
+  });
+
+  it.each(mutationOperationRegistry)(
+    "documents idempotency on $method $path",
+    ({ method, path, operationId }) => {
+      const operation = swaggerSpec.paths[path][method];
+      expect(operation.operationId).toBe(operationId);
+      expect(operation.parameters).toContainEqual(
+        expect.objectContaining({
+          name: "Idempotency-Key",
+          in: "header",
+          required: false,
+        })
+      );
+      expect(operation.parameters).toContainEqual(
+        expect.objectContaining({
+          name: "X-Correlation-ID",
+          in: "header",
+          required: false,
+        })
+      );
+      expect(operation.description).toContain("exact replay");
+      expect(operation.description).toContain("return 409");
+      expect(operation.responses["400"]).toBeDefined();
+      expect(operation.responses["409"]).toBeDefined();
+      expect(operation.responses["400"]["x-request-context-errors"]).toEqual(
+        ["INVALID_CORRELATION_ID"]
+      );
+      expect(operation.responses["400"]["x-idempotency-errors"]).toEqual(
+        expect.arrayContaining([
+          "INVALID_CORRELATION_ID",
+          "INVALID_IDEMPOTENCY_KEY",
+        ])
+      );
+      expect(new Set(operation.responses["400"]["x-idempotency-errors"]).size)
+        .toBe(operation.responses["400"]["x-idempotency-errors"].length);
+      expect(operation.responses["409"]["x-idempotency-errors"]).toEqual(
+        expect.arrayContaining([
+          "IDEMPOTENCY_CONFLICT",
+          "IDEMPOTENCY_IN_PROGRESS",
+        ])
+      );
+      expect(new Set(operation.responses["409"]["x-idempotency-errors"]).size)
+        .toBe(operation.responses["409"]["x-idempotency-errors"].length);
+
+      for (const response of Object.values(operation.responses)) {
+        expect(response.headers).toEqual(
+          expect.objectContaining({
+            "X-Request-ID": expect.objectContaining({
+              schema: { type: "string", format: "uuid" },
+            }),
+            "X-Correlation-ID": expect.objectContaining({
+              schema: expect.objectContaining({ type: "string" }),
+            }),
+            "Idempotency-Replayed": expect.objectContaining({
+              schema: expect.objectContaining({ enum: ["true", "false"] }),
+            }),
+          })
+        );
+      }
+    }
+  );
+
+  it("limits Idempotency-Key to exactly the 18 registered Inventory Core mutations", () => {
+    const registeredMutations = new Set(
+      mutationOperationRegistry.map(({ method, path }) => `${method} ${path}`)
+    );
+
+    expect(mutationOperationRegistry).toHaveLength(18);
+    for (const { method, path, operation } of documentedOperations()) {
+      const hasIdempotencyKey = (operation.parameters || [])
+        .map(parameterName)
+        .includes("Idempotency-Key");
+
+      expect(hasIdempotencyKey).toBe(
+        registeredMutations.has(`${method} ${path}`)
+      );
+    }
+  });
+
+  it("documents correlation but not idempotency on GET operations", () => {
+    for (const { method, operation } of documentedOperations()) {
+      if (method !== "get") continue;
+      const names = (operation.parameters || []).map(parameterName);
+
+      expect(names).toContain("X-Correlation-ID");
+      expect(names).not.toContain("Idempotency-Key");
+    }
+  });
+
+  it("documents request/correlation headers on every documented response", () => {
+    for (const pathItem of Object.values(swaggerSpec.paths)) {
+      for (const operation of Object.values(pathItem)) {
+        if (!operation.responses) continue;
+        for (const response of Object.values(operation.responses)) {
+          expect(response.headers).toEqual(
+            expect.objectContaining({
+              "X-Request-ID": expect.objectContaining({
+                schema: { type: "string", format: "uuid" },
+              }),
+              "X-Correlation-ID": expect.objectContaining({
+                schema: expect.objectContaining({ type: "string" }),
+              }),
+            })
+          );
+        }
+      }
+    }
   });
 });

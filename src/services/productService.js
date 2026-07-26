@@ -188,15 +188,83 @@ const convertDuplicateError = (error, bulk = false) => {
   throw error;
 };
 
-const updateProduct = async ({ productId, update, actorId }) => {
+const createProduct = async ({
+  sku,
+  name,
+  description,
+  unit,
+  status,
+  session,
+}) => {
+  try {
+    const existingProductQuery = Product.findOne({ sku });
+    if (session) existingProductQuery.session(session);
+    const existingProduct = await existingProductQuery;
+
+    if (existingProduct) {
+      throw createDomainError(
+        errorCodes.DUPLICATE_RESOURCE,
+        409,
+        "A product with this SKU already exists"
+      );
+    }
+
+    const productData = { sku, name, description, unit, status };
+    if (!session) return Product.create(productData);
+
+    const [product] = await Product.create([productData], { session });
+    return product;
+  } catch (error) {
+    return convertDuplicateError(error);
+  }
+};
+
+const createProductsBulk = async ({ products: productsToCreate, session }) => {
+  const skus = productsToCreate.map((product) => product.sku);
+
+  if (new Set(skus).size !== skus.length) {
+    throw createDomainError(
+      errorCodes.VALIDATION_FAILED,
+      400,
+      "Duplicate SKUs are not allowed in the same request"
+    );
+  }
+
+  try {
+    const existingProductQuery = Product.findOne({ sku: { $in: skus } });
+    if (session) existingProductQuery.session(session);
+    const existingProduct = await existingProductQuery;
+
+    if (existingProduct) {
+      throw createDomainError(
+        errorCodes.DUPLICATE_RESOURCE,
+        409,
+        "One or more product SKUs already exist"
+      );
+    }
+
+    const products = await Product.insertMany(
+      productsToCreate,
+      session ? { session } : undefined
+    );
+    return {
+      createdCount: products.length,
+      products,
+    };
+  } catch (error) {
+    return convertDuplicateError(error, true);
+  }
+};
+
+const updateProduct = async ({ productId, update, actorId, session }) => {
   assertObjectId(productId);
 
   try {
-    return await withTransaction(async (session) => {
+    const execute = async (currentSession) => {
       const product = await Product.findOne({
         _id: productId,
         archivedAt: null,
-      }).session(session);
+      }).session(currentSession);
 
       if (!product) {
         throw createDomainError(
@@ -206,14 +274,21 @@ const updateProduct = async ({ productId, update, actorId }) => {
         );
       }
 
-      return updateProductInSession({ product, update, actorId, session });
-    });
+      return updateProductInSession({
+        product,
+        update,
+        actorId,
+        session: currentSession,
+      });
+    };
+
+    return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
     return convertDuplicateError(error);
   }
 };
 
-const updateProductsBulk = async ({ updates, actorId }) => {
+const updateProductsBulk = async ({ updates, actorId, session }) => {
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -226,11 +301,11 @@ const updateProductsBulk = async ({ updates, actorId }) => {
   }
 
   try {
-    return await withTransaction(async (session) => {
+    const execute = async (currentSession) => {
       const products = await Product.find({
         _id: { $in: ids },
         archivedAt: null,
-      }).session(session);
+      }).session(currentSession);
 
       if (products.length !== ids.length) {
         throw createDomainError(
@@ -263,7 +338,7 @@ const updateProductsBulk = async ({ updates, actorId }) => {
         const currentSkuOwners = await Product.find({
           sku: { $in: explicitlySubmittedSkus },
         })
-          .session(session)
+          .session(currentSession)
           .select("_id sku");
         const ownerIdBySku = new Map(
           currentSkuOwners.map((product) => [
@@ -295,7 +370,7 @@ const updateProductsBulk = async ({ updates, actorId }) => {
             product: productById.get(normalizeId(update.id)),
             update,
             actorId,
-            session,
+            session: currentSession,
           })
         );
       }
@@ -304,7 +379,9 @@ const updateProductsBulk = async ({ updates, actorId }) => {
         updatedCount: updatedProducts.length,
         products: updatedProducts,
       };
-    });
+    };
+
+    return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
     return convertDuplicateError(error, true);
   }
@@ -315,10 +392,12 @@ const deactivateProduct = ({
   actorId,
   expectedVersion,
   deactivationReason,
+  session,
 }) =>
   updateProduct({
     productId,
     actorId,
+    session,
     update: { status: "inactive", expectedVersion, deactivationReason },
   });
 
@@ -327,12 +406,13 @@ const archiveProduct = async ({
   actorId,
   expectedVersion,
   archiveReason,
+  session,
 }) => {
   assertObjectId(productId);
   assertExpectedVersion(expectedVersion);
 
-  return withTransaction(async (session) => {
-    const product = await Product.findById(productId).session(session);
+  const execute = async (currentSession) => {
+    const product = await Product.findById(productId).session(currentSession);
 
     if (!product || product.archivedAt) {
       throw createDomainError(
@@ -366,7 +446,7 @@ const archiveProduct = async ({
     const archivedProduct = await Product.findOneAndUpdate(
       { _id: product._id, version: product.version, archivedAt: null },
       { $set: fieldsToSet, $inc: { version: 1 } },
-      { returnDocument: "after", session, runValidators: true }
+      { returnDocument: "after", session: currentSession, runValidators: true }
     );
 
     if (!archivedProduct) throw staleVersionError();
@@ -374,14 +454,16 @@ const archiveProduct = async ({
     await applyProductStockGuard({
       productId: product._id,
       guardStatus: "archived",
-      session,
+      session: currentSession,
     });
 
     return archivedProduct;
-  });
+  };
+
+  return session ? execute(session) : withTransaction(execute);
 };
 
-const archiveProductsBulk = async ({ ids, actorId, archiveReason }) => {
+const archiveProductsBulk = async ({ ids, actorId, archiveReason, session }) => {
   ids.forEach((id) => assertObjectId(id));
   const normalizedIds = ids.map(normalizeId);
 
@@ -393,10 +475,10 @@ const archiveProductsBulk = async ({ ids, actorId, archiveReason }) => {
     );
   }
 
-  return withTransaction(async (session) => {
+  const execute = async (currentSession) => {
     const products = await Product.find({
       _id: { $in: normalizedIds },
-    }).session(session);
+    }).session(currentSession);
 
     if (
       products.length !== normalizedIds.length ||
@@ -435,7 +517,7 @@ const archiveProductsBulk = async ({ ids, actorId, archiveReason }) => {
       const result = await Product.updateOne(
         { _id: product._id, version: product.version, archivedAt: null },
         { $set: fieldsToSet, $inc: { version: 1 } },
-        { session, runValidators: true }
+        { session: currentSession, runValidators: true }
       );
 
       if (result.modifiedCount !== 1) throw staleVersionError();
@@ -443,15 +525,19 @@ const archiveProductsBulk = async ({ ids, actorId, archiveReason }) => {
       await applyProductStockGuard({
         productId: product._id,
         guardStatus: "archived",
-        session,
+        session: currentSession,
       });
     }
 
     return { deletedCount: normalizedIds.length };
-  });
+  };
+
+  return session ? execute(session) : withTransaction(execute);
 };
 
 module.exports = {
+  createProduct,
+  createProductsBulk,
   updateProduct,
   updateProductsBulk,
   deactivateProduct,
