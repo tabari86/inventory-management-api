@@ -30,10 +30,11 @@ const createProduct = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, input),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         productService.createProduct({
           ...input,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (product) => ({
@@ -63,10 +64,11 @@ const createProductsBulk = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, productsToCreate),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         productService.createProductsBulk({
           products: productsToCreate,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({
@@ -111,11 +113,12 @@ const updateProductsBulk = async (req, res, next) => {
         req,
         updates.map((update) => ({ ...update, id: normalizeId(update.id) }))
       ),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         productService.updateProductsBulk({
           updates,
           actorId: req.user.id,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({
@@ -137,11 +140,12 @@ const deleteProductsBulk = async (req, res, next) => {
       res,
       statusCode: 200,
       command: commandFor(req, { ids: ids.map(normalizeId) }),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         productService.archiveProductsBulk({
           ids,
           actorId: req.user.id,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({
@@ -225,12 +229,13 @@ const updateProduct = async (req, res, next) => {
       res,
       statusCode: 200,
       command: commandFor(req, update, { id: normalizeId(id) }),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         productService.updateProduct({
           productId: id,
           actorId: req.user.id,
           update,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (updatedProduct) => ({
@@ -256,12 +261,13 @@ const deactivateProduct = async (req, res, next) => {
       res,
       statusCode: 200,
       command: commandFor(req, input, { id: normalizeId(req.params.id) }),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         productService.deactivateProduct({
           productId: req.params.id,
           actorId: req.user.id,
           ...input,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (updatedProduct) => ({
@@ -287,12 +293,13 @@ const deleteProduct = async (req, res, next) => {
       res,
       statusCode: 200,
       command: commandFor(req, input, { id: normalizeId(req.params.id) }),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         productService.archiveProduct({
           productId: req.params.id,
           actorId: req.user.id,
           ...input,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: () => ({

@@ -5,6 +5,10 @@ const errorCodes = require("../errors/errorCodes");
 const Stock = require("../models/Stock");
 const Warehouse = require("../models/Warehouse");
 const withTransaction = require("../utils/transaction");
+const {
+  buildStockSnapshot,
+  buildWarehouseSnapshot,
+} = require("./eventSnapshots");
 
 const WAREHOUSE_FIELDS = ["name", "description", "status"];
 const normalizeId = (id) => String(id).toLowerCase();
@@ -59,20 +63,156 @@ const applyWarehouseStockGuard = async ({
   warehouseId,
   guardStatus,
   session,
+  eventCollector,
+  causeWarehouse,
 }) => {
-  if (!guardStatus) return;
+  if (!guardStatus) return [];
 
-  await Stock.updateMany(
-    {
-      warehouseId,
-      warehouseLifecycleStatus: { $ne: guardStatus },
-    },
-    {
-      $set: { warehouseLifecycleStatus: guardStatus },
-      $inc: { version: 1 },
-    },
-    { session }
-  );
+  const stocks = await Stock.find({
+    warehouseId,
+    warehouseLifecycleStatus: { $ne: guardStatus },
+  })
+    .sort({ _id: 1 })
+    .session(session);
+  const updatedStocks = [];
+
+  for (const stock of stocks) {
+    const updatedStock = await Stock.findOneAndUpdate(
+      { _id: stock._id, version: stock.version },
+      {
+        $set: { warehouseLifecycleStatus: guardStatus },
+        $inc: { version: 1 },
+      },
+      { returnDocument: "after", session, runValidators: true }
+    );
+    if (!updatedStock) throw staleVersionError();
+    updatedStocks.push(updatedStock);
+    eventCollector?.recordChange({
+      eventType: "inventory.stock.availability-guard-changed",
+      aggregateType: "Stock",
+      aggregateId: normalizeId(updatedStock._id),
+      aggregateVersion: updatedStock.version,
+      before: buildStockSnapshot(stock),
+      after: buildStockSnapshot(updatedStock),
+      payload: {
+        stockId: normalizeId(updatedStock._id),
+        productId: normalizeId(updatedStock.productId),
+        warehouseId: normalizeId(updatedStock.warehouseId),
+        beforeGuard: {
+          status: stock.status,
+          productLifecycleStatus: stock.productLifecycleStatus,
+          warehouseLifecycleStatus: stock.warehouseLifecycleStatus,
+        },
+        afterGuard: {
+          status: updatedStock.status,
+          productLifecycleStatus: updatedStock.productLifecycleStatus,
+          warehouseLifecycleStatus: updatedStock.warehouseLifecycleStatus,
+        },
+        cause: {
+          aggregateType: "Warehouse",
+          aggregateId: normalizeId(causeWarehouse._id),
+          aggregateVersion: causeWarehouse.version,
+        },
+        aggregateVersion: updatedStock.version,
+      },
+      reasonCode: "WAREHOUSE_LIFECYCLE_GUARD_CHANGED",
+      metadata: {
+        causeAggregateType: "Warehouse",
+        causeAggregateId: normalizeId(causeWarehouse._id),
+      },
+    });
+  }
+
+  return updatedStocks;
+};
+
+const comparable = (value) => JSON.stringify(value);
+const changedSnapshotFields = (before, after) =>
+  Object.keys(after)
+    .filter((field) => comparable(before[field]) !== comparable(after[field]))
+    .sort();
+
+const recordWarehouseTransition = ({
+  eventCollector,
+  beforeWarehouse,
+  afterWarehouse,
+  bulkItemIndex,
+  forceChanged = false,
+  explicitChangedFields,
+}) => {
+  if (!eventCollector) return;
+  const before = beforeWarehouse
+    ? buildWarehouseSnapshot(beforeWarehouse)
+    : null;
+  const after = buildWarehouseSnapshot(afterWarehouse);
+  const metadata = {};
+  if (bulkItemIndex !== undefined) metadata.bulkItemIndex = bulkItemIndex;
+
+  if (before && !forceChanged && comparable(before) === comparable(after)) {
+    eventCollector.recordNoChange({
+      aggregateType: "Warehouse",
+      aggregateId: normalizeId(afterWarehouse._id),
+      aggregateVersion: afterWarehouse.version,
+      before,
+      after,
+      metadata,
+    });
+    return;
+  }
+
+  let eventType = "warehouse.updated";
+  let reasonCode = null;
+  let payload;
+  if (!before) {
+    eventType = "warehouse.created";
+    payload = {
+      warehouseId: normalizeId(afterWarehouse._id),
+      code: afterWarehouse.code,
+      status: afterWarehouse.status,
+      aggregateVersion: afterWarehouse.version,
+    };
+  } else if (before.status === "inactive" && after.status === "active") {
+    eventType = "warehouse.reactivated";
+    reasonCode = "WAREHOUSE_REACTIVATED";
+    payload = {
+      warehouseId: normalizeId(afterWarehouse._id),
+      code: afterWarehouse.code,
+      previousStatus: before.status,
+      status: after.status,
+      aggregateVersion: afterWarehouse.version,
+    };
+  } else if (before.status === "active" && after.status === "inactive") {
+    eventType = "warehouse.deactivated";
+    reasonCode = "WAREHOUSE_DEACTIVATED";
+    payload = {
+      warehouseId: normalizeId(afterWarehouse._id),
+      code: afterWarehouse.code,
+      previousStatus: before.status,
+      status: after.status,
+      reasonCode,
+      aggregateVersion: afterWarehouse.version,
+    };
+  } else {
+    payload = {
+      warehouseId: normalizeId(afterWarehouse._id),
+      code: afterWarehouse.code,
+      changedFields:
+        explicitChangedFields || changedSnapshotFields(before, after),
+      aggregateVersion: afterWarehouse.version,
+    };
+  }
+
+  eventCollector.recordChange({
+    eventType,
+    aggregateType: "Warehouse",
+    aggregateId: normalizeId(afterWarehouse._id),
+    aggregateVersion: afterWarehouse.version,
+    before,
+    after,
+    payload,
+    reasonCode,
+    metadata,
+  });
 };
 
 const buildWarehouseUpdate = ({ warehouse, update, actorId }) => {
@@ -125,6 +265,8 @@ const updateWarehouseInSession = async ({
   update,
   actorId,
   session,
+  eventCollector,
+  bulkItemIndex,
 }) => {
   assertCurrentVersion(warehouse.version);
   assertExpectedVersion(update.expectedVersion);
@@ -139,7 +281,15 @@ const updateWarehouseInSession = async ({
   const { fieldsToSet, fieldsToUnset, guardStatus, changed } =
     buildWarehouseUpdate({ warehouse, update, actorId });
 
-  if (!changed) return warehouse;
+  if (!changed) {
+    recordWarehouseTransition({
+      eventCollector,
+      beforeWarehouse: warehouse,
+      afterWarehouse: warehouse,
+      bulkItemIndex,
+    });
+    return warehouse;
+  }
 
   const updateDocument = {
     $set: fieldsToSet,
@@ -158,10 +308,28 @@ const updateWarehouseInSession = async ({
 
   if (!updatedWarehouse) throw staleVersionError();
 
+  recordWarehouseTransition({
+    eventCollector,
+    beforeWarehouse: warehouse,
+    afterWarehouse: updatedWarehouse,
+    bulkItemIndex,
+    forceChanged: true,
+    explicitChangedFields: [
+      ...new Set([
+        ...Object.keys(fieldsToSet),
+        ...Object.keys(fieldsToUnset),
+      ]),
+    ]
+      .filter((field) => WAREHOUSE_FIELDS.includes(field))
+      .sort(),
+  });
+
   await applyWarehouseStockGuard({
     warehouseId: warehouse._id,
     guardStatus,
     session,
+    eventCollector,
+    causeWarehouse: updatedWarehouse,
   });
 
   return updatedWarehouse;
@@ -173,6 +341,7 @@ const createWarehouse = async ({
   description,
   status,
   session,
+  eventCollector,
 }) => {
   const normalizedCode = code.toUpperCase();
   const existingWarehouseQuery = Warehouse.findOne({ code: normalizedCode });
@@ -197,6 +366,7 @@ const createWarehouse = async ({
   try {
     if (!session) return await Warehouse.create(warehouseData);
     const [warehouse] = await Warehouse.create([warehouseData], { session });
+    recordWarehouseTransition({ eventCollector, afterWarehouse: warehouse });
     return warehouse;
   } catch (error) {
     if (error instanceof DomainError) throw error;
@@ -211,7 +381,11 @@ const createWarehouse = async ({
   }
 };
 
-const createWarehousesBulk = async ({ warehouses: input, session }) => {
+const createWarehousesBulk = async ({
+  warehouses: input,
+  session,
+  eventCollector,
+}) => {
   const warehousesToCreate = input.map((warehouse) => ({
     ...warehouse,
     code: warehouse.code.toUpperCase(),
@@ -243,6 +417,13 @@ const createWarehousesBulk = async ({ warehouses: input, session }) => {
       warehousesToCreate,
       session ? { session } : undefined
     );
+    for (let index = 0; index < warehouses.length; index += 1) {
+      recordWarehouseTransition({
+        eventCollector,
+        afterWarehouse: warehouses[index],
+        bulkItemIndex: index,
+      });
+    }
     return {
       createdCount: warehouses.length,
       warehouses,
@@ -260,7 +441,13 @@ const createWarehousesBulk = async ({ warehouses: input, session }) => {
   }
 };
 
-const updateWarehouse = async ({ warehouseId, update, actorId, session }) => {
+const updateWarehouse = async ({
+  warehouseId,
+  update,
+  actorId,
+  session,
+  eventCollector,
+}) => {
   assertObjectId(warehouseId);
 
   const execute = async (currentSession) => {
@@ -281,13 +468,19 @@ const updateWarehouse = async ({ warehouseId, update, actorId, session }) => {
       update,
       actorId,
       session: currentSession,
+      eventCollector,
     });
   };
 
   return session ? execute(session) : withTransaction(execute);
 };
 
-const updateWarehousesBulk = async ({ updates, actorId, session }) => {
+const updateWarehousesBulk = async ({
+  updates,
+  actorId,
+  session,
+  eventCollector,
+}) => {
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -317,13 +510,16 @@ const updateWarehousesBulk = async ({ updates, actorId, session }) => {
     );
     const updatedWarehouses = [];
 
-    for (const update of updates) {
+    for (let index = 0; index < updates.length; index += 1) {
+      const update = updates[index];
       updatedWarehouses.push(
         await updateWarehouseInSession({
           warehouse: warehouseById.get(normalizeId(update.id)),
           update,
           actorId,
           session: currentSession,
+          eventCollector,
+          bulkItemIndex: index,
         })
       );
     }
@@ -343,11 +539,13 @@ const deactivateWarehouse = ({
   expectedVersion,
   deactivationReason,
   session,
+  eventCollector,
 }) =>
   updateWarehouse({
     warehouseId,
     actorId,
     session,
+    eventCollector,
     update: { status: "inactive", expectedVersion, deactivationReason },
   });
 

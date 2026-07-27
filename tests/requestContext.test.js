@@ -63,6 +63,7 @@ describe("request context", () => {
     expect(observedContext).toEqual({
       requestId: response.headers["x-request-id"],
       correlationId: "order:2026-07-26.001",
+      causationId: response.headers["x-request-id"],
       source: "http-api",
       actor: {
         type: "user",

@@ -26,10 +26,11 @@ const createGoodsIssue = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, normalizeIssue(input)),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         inventoryService.createGoodsIssue({
           ...input,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({
@@ -51,10 +52,11 @@ const createGoodsIssuesBulk = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, issues.map(normalizeIssue)),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         inventoryService.createGoodsIssuesBulk({
           issues,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({

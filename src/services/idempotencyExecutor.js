@@ -8,6 +8,8 @@ const {
 } = IdempotencyRecord;
 const { hashCanonicalCommand } = require("../utils/canonicalJson");
 const withTransaction = require("../utils/transaction");
+const { createDomainEventCollector } = require("./domainEventCollector");
+const { persistAuditOutboxEvents } = require("./auditOutboxService");
 
 const MAX_ACQUISITION_ATTEMPTS = 3;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -127,15 +129,6 @@ const executeInventoryMutation = async ({
   buildResponse,
   dependencies = {},
 }) => {
-  if (!inventoryOperation?.keyHash) {
-    const result = await execute({ session: undefined });
-    return {
-      statusCode,
-      body: buildResponse(result),
-      replayed: null,
-    };
-  }
-
   if (!context?.actor?.type || !context?.actor?.id) {
     throw new DomainError({
       code: errorCodes.VALIDATION_FAILED,
@@ -148,8 +141,12 @@ const executeInventoryMutation = async ({
   if (
     context.actor.type !== "user" ||
     context.source !== "http-api" ||
-    inventoryOperation.operationId !== command?.operationId ||
-    !SHA256_PATTERN.test(inventoryOperation.keyHash)
+    typeof context.requestId !== "string" ||
+    typeof context.correlationId !== "string" ||
+    context.causationId !== context.requestId ||
+    inventoryOperation?.operationId !== command?.operationId ||
+    (inventoryOperation?.keyHash !== null &&
+      !SHA256_PATTERN.test(inventoryOperation?.keyHash))
   ) {
     throw new DomainError({
       code: errorCodes.VALIDATION_FAILED,
@@ -170,6 +167,10 @@ const executeInventoryMutation = async ({
 
   const now = dependencies.now || (() => new Date());
   const backoff = dependencies.backoff || defaultBackoff;
+  const collectorFactory =
+    dependencies.eventCollectorFactory || createDomainEventCollector;
+  const eventPersistence =
+    dependencies.eventPersistence || persistAuditOutboxEvents;
   const requestedResponseLimit = dependencies.responseLimitBytes;
   const responseLimitBytes =
     Number.isInteger(requestedResponseLimit) && requestedResponseLimit >= 0
@@ -180,6 +181,47 @@ const executeInventoryMutation = async ({
     Number.isInteger(requestedMaxAttempts) && requestedMaxAttempts >= 1
       ? Math.min(requestedMaxAttempts, MAX_ACQUISITION_ATTEMPTS)
       : MAX_ACQUISITION_ATTEMPTS;
+
+  const executeAttempt = async ({ session, record = null, keyed }) => {
+    const eventCollector = collectorFactory();
+    const result = await execute({ session, eventCollector });
+    const idempotency = record
+      ? {
+          recordId: record._id.toString().toLowerCase(),
+          keyHash: inventoryOperation.keyHash,
+        }
+      : null;
+
+    await eventPersistence({
+      descriptors: eventCollector.descriptors(),
+      context,
+      operationId: inventoryOperation.operationId,
+      idempotency,
+      session,
+    });
+
+    const publicBody = buildResponse(result);
+    const serializedResponse = serializeResponse(
+      publicBody,
+      keyed ? responseLimitBytes : Number.MAX_SAFE_INTEGER
+    );
+    return { result, ...serializedResponse };
+  };
+
+  if (!inventoryOperation.keyHash) {
+    return withTransaction(async (session) => {
+      const { responseBody } = await executeAttempt({
+        session,
+        keyed: false,
+      });
+      return {
+        statusCode,
+        body: responseBody,
+        replayed: null,
+      };
+    });
+  }
+
   const { requestHash, requestHashVersion } = hashCanonicalCommand(command);
   const scope = createScope({
     context,
@@ -222,12 +264,11 @@ const executeInventoryMutation = async ({
           throw error;
         }
 
-        const result = await execute({ session });
-        const publicBody = buildResponse(result);
-        const { responseBody, responseSizeBytes } = serializeResponse(
-          publicBody,
-          responseLimitBytes
-        );
+        const { responseBody, responseSizeBytes } = await executeAttempt({
+          session,
+          record,
+          keyed: true,
+        });
         const completedAt = new Date(now());
 
         record.state = "completed";

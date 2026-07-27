@@ -127,3 +127,47 @@ been executed. Completed records expire seven days after completion, but the
 MongoDB TTL monitor removes them asynchronously. A still-present expired record
 remains authoritative; the key can be reused after physical removal. There is
 no application cleanup job or request-time deletion.
+
+## Audit/outbox index migration
+
+AuditEvent and OutboxEvent begin recording at runtime cutover. The controlled
+migration creates only their required indexes; it does not backfill or fabricate
+historical events and does not modify domain or event documents. Runtime
+automatic index creation is disabled for both models.
+
+Dry-run is the default:
+
+```bash
+npm run migrate:phase1-audit-outbox
+```
+
+Apply requires exactly the explicit flag:
+
+```bash
+npm run migrate:phase1-audit-outbox -- --apply
+```
+
+The migration inspects both collection and index states, validates ordered keys,
+directions, uniqueness, `prepareUnique`, sparse/partial definitions, collation,
+hidden and TTL semantics, and accepts a compatible alternate index name. An
+incompatible reserved name always blocks execution. Any TTL index on either
+collection is rejected. Before the first index write, apply preflights duplicate
+Audit IDs, duplicate Outbox event IDs, and duplicate Outbox aggregate
+type/ID/version identities. It never drops, renames, repairs, deletes, or
+backfills.
+
+Deployment order:
+
+1. Deploy or locally check the audit/outbox migration tooling.
+2. Run dry-run against the intended target database.
+3. Inspect collection existence, duplicate counts, and the complete index plan.
+4. Resolve blockers through a separately reviewed data/index operation.
+5. Run the explicit `--apply` command.
+6. Rerun dry-run and verify every required index is present and compatible.
+7. Deploy runtime code and run production mutation, no-op, and replay smoke tests.
+
+Codex did not execute this migration against production. No historical events
+are backfilled; event history begins at cutover. Pending OutboxEvents accumulate
+until a future delivery worker is deliberately designed and deployed. Audit
+retention and delivered-Outbox retention remain deferred policy decisions; no
+TTL or cleanup task is included.

@@ -26,6 +26,7 @@ const requestContext = (req, res, next) => {
   req.applicationContext = {
     requestId,
     correlationId,
+    causationId: requestId,
     source: CONTEXT_SOURCE,
   };
 

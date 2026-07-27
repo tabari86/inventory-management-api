@@ -26,11 +26,12 @@ const createStock = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, input),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         stockService.createStock({
           productId,
           warehouseId,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (stock) => ({
@@ -55,10 +56,11 @@ const createStocksBulk = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, normalizedStocks),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         stockService.createStocksBulk({
           stocks: req.body,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({

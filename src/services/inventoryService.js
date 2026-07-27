@@ -7,6 +7,7 @@ const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
 const Warehouse = require("../models/Warehouse");
 const withTransaction = require("../utils/transaction");
+const { buildStockSnapshot } = require("./eventSnapshots");
 
 const createDomainError = (code, httpStatus, message) =>
   new DomainError({ code, httpStatus, message });
@@ -166,6 +167,55 @@ const createMovementDocument = ({
   },
 });
 
+const recordInventoryTransition = ({
+  eventCollector,
+  type,
+  beforeStock,
+  afterStock,
+  stockMovement,
+  reference,
+  bulkItemIndex,
+}) => {
+  if (!eventCollector) return;
+  const receipt = type === "GOODS_RECEIPT";
+  const reasonCode = receipt ? "GOODS_RECEIPT" : "GOODS_ISSUE";
+  const signedDelta = receipt
+    ? stockMovement.quantity
+    : -stockMovement.quantity;
+  const metadata = {
+    stockMovementId: stockMovement._id.toString().toLowerCase(),
+    movementType: type,
+    signedQuantityDelta: signedDelta,
+  };
+  if (reference !== undefined) metadata.reference = reference;
+  if (bulkItemIndex !== undefined) metadata.bulkItemIndex = bulkItemIndex;
+
+  eventCollector.recordChange({
+    eventType: receipt
+      ? "inventory.stock.received"
+      : "inventory.stock.issued",
+    aggregateType: "Stock",
+    aggregateId: afterStock._id.toString().toLowerCase(),
+    aggregateVersion: afterStock.version,
+    before: buildStockSnapshot(beforeStock),
+    after: buildStockSnapshot(afterStock),
+    payload: {
+      stockId: afterStock._id.toString().toLowerCase(),
+      productId: afterStock.productId.toString().toLowerCase(),
+      warehouseId: afterStock.warehouseId.toString().toLowerCase(),
+      stockMovementId: stockMovement._id.toString().toLowerCase(),
+      signedDelta,
+      beforeQuantity: beforeStock.quantity,
+      afterQuantity: afterStock.quantity,
+      reference: reference ?? null,
+      reasonCode,
+      aggregateVersion: afterStock.version,
+    },
+    reasonCode,
+    metadata,
+  });
+};
+
 const loadSingleInventoryContext = async ({ stockId, session }) => {
   const stock = await Stock.findById(stockId).session(session).lean();
   if (!stock) return { stock };
@@ -218,45 +268,55 @@ const createGoodsReceiptInSession = async ({
   reference,
   reason,
   session,
+  eventCollector,
 }) => {
-    const { stock, product, warehouse } = await loadSingleInventoryContext({
-      stockId,
-      session,
-    });
-    validateInventoryContext({
-      stock,
-      product,
-      warehouse,
-      type: "GOODS_RECEIPT",
-    });
+  const { stock, product, warehouse } = await loadSingleInventoryContext({
+    stockId,
+    session,
+  });
+  validateInventoryContext({
+    stock,
+    product,
+    warehouse,
+    type: "GOODS_RECEIPT",
+  });
 
-    const updatedStock = await updateStockForMovement({
-      stock,
-      quantity,
-      type: "GOODS_RECEIPT",
-      session,
-    });
+  const updatedStock = await updateStockForMovement({
+    stock,
+    quantity,
+    type: "GOODS_RECEIPT",
+    session,
+  });
 
-    const [stockMovement] = await StockMovement.create(
-      [
-        createMovementDocument({
-          item: { quantity, reference, reason },
-          stock,
-          product,
-          warehouse,
-          type: "GOODS_RECEIPT",
-          quantityBefore: stock.quantity,
-          quantityAfter: updatedStock.quantity,
-          aggregateVersion: updatedStock.version,
-        }),
-      ],
-      { session }
-    );
+  const [stockMovement] = await StockMovement.create(
+    [
+      createMovementDocument({
+        item: { quantity, reference, reason },
+        stock,
+        product,
+        warehouse,
+        type: "GOODS_RECEIPT",
+        quantityBefore: stock.quantity,
+        quantityAfter: updatedStock.quantity,
+        aggregateVersion: updatedStock.version,
+      }),
+    ],
+    { session }
+  );
 
-    return {
-      stock: updatedStock,
-      stockMovement,
-    };
+  recordInventoryTransition({
+    eventCollector,
+    type: "GOODS_RECEIPT",
+    beforeStock: stock,
+    afterStock: updatedStock,
+    stockMovement,
+    reference,
+  });
+
+  return {
+    stock: updatedStock,
+    stockMovement,
+  };
 };
 
 const createGoodsReceipt = async ({
@@ -265,6 +325,7 @@ const createGoodsReceipt = async ({
   reference,
   reason,
   session,
+  eventCollector,
 }) => {
   validateSingleInventoryInput({ stockId, quantity });
 
@@ -275,6 +336,7 @@ const createGoodsReceipt = async ({
       reference,
       reason,
       session: currentSession,
+      eventCollector,
     });
   return session ? execute(session) : withTransaction(execute);
 };
@@ -285,53 +347,63 @@ const createGoodsIssueInSession = async ({
   reference,
   reason,
   session,
+  eventCollector,
 }) => {
-    const { stock, product, warehouse } = await loadSingleInventoryContext({
-      stockId,
-      session,
-    });
-    validateInventoryContext({
-      stock,
-      product,
-      warehouse,
-      type: "GOODS_ISSUE",
-    });
+  const { stock, product, warehouse } = await loadSingleInventoryContext({
+    stockId,
+    session,
+  });
+  validateInventoryContext({
+    stock,
+    product,
+    warehouse,
+    type: "GOODS_ISSUE",
+  });
 
-    if (stock.quantity < quantity) {
-      throw createDomainError(
-        errorCodes.INSUFFICIENT_STOCK,
-        409,
-        "Not enough stock available"
-      );
-    }
-
-    const updatedStock = await updateStockForMovement({
-      stock,
-      quantity,
-      type: "GOODS_ISSUE",
-      session,
-    });
-
-    const [stockMovement] = await StockMovement.create(
-      [
-        createMovementDocument({
-          item: { quantity, reference, reason },
-          stock,
-          product,
-          warehouse,
-          type: "GOODS_ISSUE",
-          quantityBefore: stock.quantity,
-          quantityAfter: updatedStock.quantity,
-          aggregateVersion: updatedStock.version,
-        }),
-      ],
-      { session }
+  if (stock.quantity < quantity) {
+    throw createDomainError(
+      errorCodes.INSUFFICIENT_STOCK,
+      409,
+      "Not enough stock available"
     );
+  }
 
-    return {
-      stock: updatedStock,
-      stockMovement,
-    };
+  const updatedStock = await updateStockForMovement({
+    stock,
+    quantity,
+    type: "GOODS_ISSUE",
+    session,
+  });
+
+  const [stockMovement] = await StockMovement.create(
+    [
+      createMovementDocument({
+        item: { quantity, reference, reason },
+        stock,
+        product,
+        warehouse,
+        type: "GOODS_ISSUE",
+        quantityBefore: stock.quantity,
+        quantityAfter: updatedStock.quantity,
+        aggregateVersion: updatedStock.version,
+      }),
+    ],
+    { session }
+  );
+
+  recordInventoryTransition({
+    eventCollector,
+    type: "GOODS_ISSUE",
+    beforeStock: stock,
+    afterStock: updatedStock,
+    stockMovement,
+    reference,
+  });
+
+  return {
+    stock: updatedStock,
+    stockMovement,
+  };
 };
 
 const createGoodsIssue = async ({
@@ -340,6 +412,7 @@ const createGoodsIssue = async ({
   reference,
   reason,
   session,
+  eventCollector,
 }) => {
   validateSingleInventoryInput({ stockId, quantity });
 
@@ -350,11 +423,17 @@ const createGoodsIssue = async ({
       reference,
       reason,
       session: currentSession,
+      eventCollector,
     });
   return session ? execute(session) : withTransaction(execute);
 };
 
-const createBulkInventoryMutationInSession = async ({ items, type, session }) => {
+const createBulkInventoryMutationInSession = async ({
+  items,
+  type,
+  session,
+  eventCollector,
+}) => {
   const quantityByStockId = new Map();
 
   for (const item of items) {
@@ -425,6 +504,7 @@ const createBulkInventoryMutationInSession = async ({ items, type, session }) =>
   }
 
   const movementDocuments = [];
+  const transitions = [];
 
   for (const item of items) {
     const stockId = item.stockId.toLowerCase();
@@ -450,12 +530,26 @@ const createBulkInventoryMutationInSession = async ({ items, type, session }) =>
         aggregateVersion: updatedStock.version,
       })
     );
+    transitions.push({ beforeStock: stock, afterStock: updatedStock, item });
     stockById.set(stockId, updatedStock);
   }
 
   const stockMovements = await StockMovement.insertMany(movementDocuments, {
     session,
+    ordered: true,
   });
+
+  for (let index = 0; index < stockMovements.length; index += 1) {
+    recordInventoryTransition({
+      eventCollector,
+      type,
+      beforeStock: transitions[index].beforeStock,
+      afterStock: transitions[index].afterStock,
+      stockMovement: stockMovements[index],
+      reference: transitions[index].item.reference,
+      bulkItemIndex: index,
+    });
+  }
 
   return {
     processedCount: stockMovements.length,
@@ -464,7 +558,12 @@ const createBulkInventoryMutationInSession = async ({ items, type, session }) =>
   };
 };
 
-const createBulkInventoryMutation = ({ items, type, session }) => {
+const createBulkInventoryMutation = ({
+  items,
+  type,
+  session,
+  eventCollector,
+}) => {
   for (const item of items) validateSingleInventoryInput(item);
 
   const execute = (currentSession) =>
@@ -472,22 +571,25 @@ const createBulkInventoryMutation = ({ items, type, session }) => {
       items,
       type,
       session: currentSession,
+      eventCollector,
     });
   return session ? execute(session) : withTransaction(execute);
 };
 
-const createGoodsReceiptsBulk = async ({ receipts, session }) =>
+const createGoodsReceiptsBulk = async ({ receipts, session, eventCollector }) =>
   createBulkInventoryMutation({
     items: receipts,
     type: "GOODS_RECEIPT",
     session,
+    eventCollector,
   });
 
-const createGoodsIssuesBulk = async ({ issues, session }) =>
+const createGoodsIssuesBulk = async ({ issues, session, eventCollector }) =>
   createBulkInventoryMutation({
     items: issues,
     type: "GOODS_ISSUE",
     session,
+    eventCollector,
   });
 
 module.exports = {

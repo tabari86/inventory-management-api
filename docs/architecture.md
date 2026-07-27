@@ -181,13 +181,14 @@ error paths carry them.
 The context passed explicitly through controllers and application services is:
 
 ```text
-{ requestId, correlationId, source: "http-api", actor: { type: "user", id } }
+{ requestId, correlationId, causationId, source: "http-api", actor: { type: "user", id } }
 ```
 
 Authentication supplies the actor from the validated User record. The context
 does not contain raw headers, JWTs, roles, email, or names. There is no
-AsyncLocalStorage or mutable global request state. This boundary is ready for
-future AuditEvent and OutboxEvent work, but neither event type is implemented.
+AsyncLocalStorage or mutable global request state. For HTTP mutations,
+`causationId` is the server-generated request ID; inbound causation headers are
+not accepted.
 
 ## Inventory Mutation Idempotency
 
@@ -203,14 +204,15 @@ sorts plain-object keys, preserves array order and JSON types, normalizes
 ObjectIds/dates, and rejects unsupported or circular values. SHA-256 hashes both
 the canonical command and the raw opaque key; the raw key is never persisted.
 
-The unique scope is `(actorType, actorId, operationId, keyHash)`. For a keyed
-original execution one transaction inserts an internal `processing` record,
-runs the session-bound domain operation and movement writes, constructs a plain
-JSON response snapshot, enforces the 1 MiB limit, and changes the record to
-`completed`. A failed transaction commits no record, and no committed `failed`
-state exists. Public service wrappers continue to own the normal transaction
-when no key is supplied; keyed execution calls the same internal work with the
-executor-owned session, avoiding nested transactions.
+The unique scope is `(actorType, actorId, operationId, keyHash)`. The common
+mutation executor owns one transaction for keyed and unkeyed HTTP writes. For a
+keyed original it inserts an internal `processing` record, runs the
+session-bound domain operation and movement writes, persists Audit and Outbox
+records, constructs a plain JSON response snapshot, enforces the 1 MiB limit,
+and changes the record to `completed`. A failed transaction commits no record,
+and no committed `failed` state exists. Direct service use retains a fallback
+transaction, while route execution always supplies the executor-owned session,
+avoiding nested transactions.
 
 MongoDB's unique compound index prevents concurrent duplicate commits. A loser
 resolves the committed record in at most three bounded attempts. Matching
@@ -221,6 +223,71 @@ index. TTL removal is asynchronous; until removal the stored record remains
 authoritative. Runtime auto-index creation is disabled for the record model; the
 dry-run-first migration owns production index creation. No Redis lock,
 application cleanup worker, lease, or heartbeat is used.
+
+## Audit and Transactional Outbox
+
+Every successful Inventory Core HTTP mutation uses one atomic boundary:
+
+```text
+domain mutation
++ StockMovement (when applicable)
++ AuditEvent
++ OutboxEvent for each actual version transition
++ keyed IdempotencyRecord completion (when applicable)
+= one MongoDB transaction
+```
+
+An attempt-local collector receives plain transition descriptors from domain
+services. It performs no writes and is recreated if the MongoDB driver retries
+the transaction callback. The persistence service validates every descriptor,
+snapshot, metadata object, payload, and model envelope before the first event
+insert. Audit rows are inserted in operation order, followed by Outbox rows in
+the same order. Domain services do not import either event model.
+
+Event granularity follows aggregate versions. Each actual Product, Warehouse,
+or Stock version transition creates one AuditEvent and one OutboxEvent. Bulk
+commands create independent per-aggregate records, repeated Stock movements
+retain sequential versions, and Stock creation creates events for each distinct
+parent version touch. A successful no-op creates one `no_change` AuditEvent with
+equivalent before/after hashes and no OutboxEvent. Idempotency replay, conflict,
+validation, authorization, and failed domain transactions create no events.
+
+AuditEvent is append-only and contains only the authenticated actor type/ID,
+stable operation ID, aggregate identity/version, outcome, request context,
+optional hashed idempotency reference, allowlisted before/after snapshots and
+bounded metadata. The exact Product snapshot keys are `id`, `sku`, `unit`,
+`status`, `version`, `deactivatedAt`, `deactivatedBy`,
+`deactivationReason`, `archivedAt`, `archivedBy`, and `archiveReason`. The exact
+Warehouse keys are `id`, `code`, `status`, `version`, `deactivatedAt`,
+`deactivatedBy`, and `deactivationReason`. The exact Stock keys are `id`,
+`productId`, `warehouseId`, `quantity`, `status`, `version`,
+`productLifecycleStatus`, and `warehouseLifecycleStatus`. Undefined keys are
+omitted and meaningful nulls remain. Product/Warehouse names and descriptions
+are deliberately excluded because they are free-form text; deterministic
+`changedFields` still records those updates. Mongoose internals and generic
+creation/update timestamps are excluded because they are not approved event
+contract fields. Snapshot and metadata limits are each 16,384 UTF-8 bytes.
+Snapshot hashes use `canonical-json-v1` and SHA-256. There is no failure-audit
+record and no Audit TTL in this work package.
+
+OutboxEvent uses stable registry-controlled event types with `eventVersion: 1`
+and `payloadSchemaVersion: 1`, the exact aggregate version, the same request
+context/idempotency reference as its Audit pair, and an event-specific payload
+limited to 65,536 UTF-8 bytes. Delivery begins as `pending` with zero attempts
+and `nextAttemptAt` equal to `occurredAt`. No polling, delivery, retry,
+dead-letter, webhook, or external publication worker exists yet. Pending rows
+therefore accumulate, and neither Audit nor Outbox has a TTL.
+
+The version-1 registry contains exactly `catalog.product.created`,
+`catalog.product.updated`, `catalog.product.reactivated`,
+`catalog.product.deactivated`, `catalog.product.archived`,
+`catalog.product.stock-linked`, `warehouse.created`, `warehouse.updated`,
+`warehouse.reactivated`, `warehouse.deactivated`, `warehouse.stock-linked`,
+`inventory.stock.created`, `inventory.stock.received`,
+`inventory.stock.issued`, and
+`inventory.stock.availability-guard-changed`. Payload builders reject unknown
+or extra fields and enforce deterministic changed/link lists, lifecycle status
+direction, movement arithmetic, and aggregate identity/version agreement.
 
 ## Stock Aggregate Design
 

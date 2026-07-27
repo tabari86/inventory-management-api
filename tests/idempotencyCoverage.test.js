@@ -1,9 +1,12 @@
 const request = require("supertest");
+const jwt = require("jsonwebtoken");
 
 const app = require("../src/app");
 const { authenticateUser } = require("../src/middleware/authMiddleware");
 const validateRequest = require("../src/middleware/validateRequest");
 const IdempotencyRecord = require("../src/models/IdempotencyRecord");
+const AuditEvent = require("../src/models/AuditEvent");
+const OutboxEvent = require("../src/models/OutboxEvent");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
 const StockMovement = require("../src/models/StockMovement");
@@ -86,10 +89,101 @@ const inventory = async (suffix, quantity = 0) => {
 };
 
 const clearInventoryCore = async () => {
+  await OutboxEvent.deleteMany({});
+  await AuditEvent.collection.deleteMany({});
   await StockMovement.deleteMany({});
   await Stock.deleteMany({});
   await Product.deleteMany({});
   await Warehouse.deleteMany({});
+};
+
+const expectedEventTypes = (name) =>
+  ({
+    "Product bulk create": [
+      "catalog.product.created",
+      "catalog.product.created",
+    ],
+    "Product bulk update": [
+      "catalog.product.updated",
+      "catalog.product.updated",
+    ],
+    "Product bulk archive": [
+      "catalog.product.archived",
+      "catalog.product.archived",
+    ],
+    "Product create": ["catalog.product.created"],
+    "Product update/reactivate": ["catalog.product.reactivated"],
+    "Product deactivate": ["catalog.product.deactivated"],
+    "Product archive": ["catalog.product.archived"],
+    "Warehouse bulk create": ["warehouse.created", "warehouse.created"],
+    "Warehouse bulk update": ["warehouse.updated", "warehouse.updated"],
+    "Warehouse create": ["warehouse.created"],
+    "Warehouse update/reactivate": ["warehouse.reactivated"],
+    "Warehouse deactivate": ["warehouse.deactivated"],
+    "Stock bulk create": [
+      "inventory.stock.created",
+      "inventory.stock.created",
+      "catalog.product.stock-linked",
+      "catalog.product.stock-linked",
+      "warehouse.stock-linked",
+    ],
+    "Stock create": [
+      "inventory.stock.created",
+      "catalog.product.stock-linked",
+      "warehouse.stock-linked",
+    ],
+    "Goods Receipt bulk": [
+      "inventory.stock.received",
+      "inventory.stock.received",
+    ],
+    "Goods Receipt single": ["inventory.stock.received"],
+    "Goods Issue bulk": [
+      "inventory.stock.issued",
+      "inventory.stock.issued",
+    ],
+    "Goods Issue single": ["inventory.stock.issued"],
+  })[name];
+
+const assertPersistedEventSet = async ({
+  expectedTypes,
+  requestId,
+  actorId,
+  idempotency,
+}) => {
+  const audits = await AuditEvent.find({}).sort({ _id: 1 }).lean();
+  const outboxes = await OutboxEvent.find({}).sort({ _id: 1 }).lean();
+  expect(audits).toHaveLength(expectedTypes.length);
+  expect(outboxes).toHaveLength(expectedTypes.length);
+  expect(outboxes.map(({ eventType }) => eventType)).toEqual(expectedTypes);
+
+  for (const audit of audits) {
+    const matches = outboxes.filter(
+      ({ aggregate }) =>
+        aggregate.type === audit.resource.type &&
+        aggregate.id === audit.resource.id &&
+        aggregate.version === audit.resource.aggregateVersion
+    );
+    expect(matches).toHaveLength(1);
+    expect(audit).toMatchObject({
+      actor: { type: "user", id: actorId },
+      outcome: "succeeded",
+      requestId,
+      correlationId: requestId,
+      causationId: requestId,
+      source: "http-api",
+      idempotency,
+    });
+    expect(matches[0]).toMatchObject({
+      requestId,
+      correlationId: requestId,
+      causationId: requestId,
+      source: "http-api",
+      idempotency,
+    });
+    expect(matches[0].occurredAt).toEqual(audit.occurredAt);
+  }
+
+  return { audits, outboxes };
 };
 
 const buildConflictingBody = (body) => {
@@ -558,7 +652,7 @@ describe("idempotency mutation coverage", () => {
 
   it.each(cases)(
     "$name preserves the first response and replays without another mutation",
-    async ({ method, path, operationId, status, admin, prepare }) => {
+    async ({ name, method, path, operationId, status, admin, prepare }) => {
       const token = admin ? await createAdminToken() : await createManagerToken();
       const baselineFixture = await prepare();
       const baselinePath =
@@ -571,6 +665,16 @@ describe("idempotency mutation coverage", () => {
       expect(baseline.status).toBe(status);
       expect(baseline.headers["idempotency-replayed"]).toBeUndefined();
       expect(await IdempotencyRecord.countDocuments()).toBe(0);
+      const actorId = jwt.decode(token).userId.toString();
+      await assertPersistedEventSet({
+        expectedTypes: expectedEventTypes(name),
+        requestId: baseline.headers["x-request-id"],
+        actorId,
+        idempotency: null,
+      });
+      expect(JSON.stringify(baseline.body)).not.toMatch(
+        /auditEventId|eventId|eventType|payloadSchemaVersion/
+      );
       await baselineFixture.verify(baseline);
       await clearInventoryCore();
 
@@ -601,6 +705,23 @@ describe("idempotency mutation coverage", () => {
         .send(fixture.body);
 
       expect(original.status).toBe(status);
+      const committedEventTypes = expectedEventTypes(name);
+      const committedEventCount = committedEventTypes.length;
+      const idempotencyRecord = await IdempotencyRecord.findOne({ operationId })
+        .lean();
+      const eventSet = await assertPersistedEventSet({
+        expectedTypes: committedEventTypes,
+        requestId: original.headers["x-request-id"],
+        actorId,
+        idempotency: {
+          recordId: idempotencyRecord._id.toString(),
+          keyHash: idempotencyRecord.keyHash,
+        },
+      });
+      expect(JSON.stringify(eventSet)).not.toContain(key);
+      expect(JSON.stringify(original.body)).not.toMatch(
+        /auditEventId|eventId|eventType|payloadSchemaVersion/
+      );
       expect(original.body.message).toBe(baseline.body.message);
       expect(replay.status).toBe(status);
       expect(original.headers["idempotency-replayed"]).toBe("false");
@@ -614,6 +735,8 @@ describe("idempotency mutation coverage", () => {
       expect(deniedReplay.headers["idempotency-replayed"]).toBeUndefined();
       expect(await IdempotencyRecord.countDocuments({ operationId })).toBe(1);
       expect(await IdempotencyRecord.countDocuments({ state: "processing" })).toBe(0);
+      expect(await AuditEvent.countDocuments()).toBe(committedEventCount);
+      expect(await OutboxEvent.countDocuments()).toBe(committedEventCount);
       await fixture.verify(original);
     }
   );

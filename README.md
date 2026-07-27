@@ -144,6 +144,9 @@ The API uses three roles:
 - Transactional Stock and StockMovement persistence for inventory workflows
 - Read-only stock movement history
 - Bulk operations for products, warehouses, stocks and inventory workflows
+- Append-only, allowlisted AuditEvent records for successful Inventory Core mutations
+- Transactional OutboxEvent records for every actual aggregate version transition
+- Atomic keyed and unkeyed mutation, movement, audit and outbox persistence
 
 ### Bulk Operations
 
@@ -621,6 +624,22 @@ Typed domain errors represent expected service failures internally. The global e
 
 Goods receipt and goods issue services use one MongoDB transaction per request. Stock changes and their StockMovement records commit together, and each bulk request is all-or-nothing. The previous manual compensation updates were removed.
 
+Every Inventory Core mutation now uses the same transaction for domain writes,
+StockMovement writes where applicable, AuditEvent records, OutboxEvent records,
+and keyed IdempotencyRecord completion. Each actual aggregate version transition
+creates one Audit/Outbox pair. Bulk and repeated Stock operations retain
+per-transition versions, including distinct Product/Warehouse parent touches on
+Stock creation. Successful no-ops create Audit only; idempotency replay creates
+no new events.
+
+Audit snapshots and metadata are allowlisted plain JSON and limited to 16 KiB
+each, with canonical SHA-256 snapshot hashes. Event-specific Outbox payloads are
+limited to 64 KiB and start in pending delivery state. These records contain no
+raw credentials, tokens, request headers, user email/name/role, or raw
+Idempotency-Key. Audit and Outbox have no TTL. No event delivery worker or public
+event API is included; pending OutboxEvents accumulate until a future worker is
+implemented.
+
 Product and Warehouse mutation controllers delegate lifecycle, explicit version,
 compare-and-swap, archive, and Stock guard propagation behavior to dedicated
 application services. Parent lifecycle and related Stock guard changes commit in
@@ -758,6 +777,20 @@ delete data, and does not invent historical quantities, versions, or snapshots.
 It backfills only safely derivable direct movement references and creates the
 partial unique movement-version index only after duplicate preflight succeeds.
 See `docs/production-data-notes.md` for deployment and rollback guidance.
+
+Audit/outbox indexes use a separate dry-run-first migration:
+
+```bash
+npm run migrate:phase1-audit-outbox
+npm run migrate:phase1-audit-outbox -- --apply
+```
+
+Run dry-run against the intended database, inspect both collection/index plans
+and duplicate counts, apply explicitly, rerun dry-run, verify compatible
+indexes, then deploy and smoke-test runtime code. Codex did not execute this
+migration against production. It creates no historical events: Audit and
+Outbox history begins at cutover. Pending OutboxEvents accumulate until a
+future delivery worker exists, and Audit/delivered-Outbox retention is deferred.
 
 These checks are operational deployment tasks and are not executed automatically by the application.
 

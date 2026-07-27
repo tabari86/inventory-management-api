@@ -5,6 +5,10 @@ const errorCodes = require("../errors/errorCodes");
 const Product = require("../models/Product");
 const Stock = require("../models/Stock");
 const withTransaction = require("../utils/transaction");
+const {
+  buildProductSnapshot,
+  buildStockSnapshot,
+} = require("./eventSnapshots");
 
 const PRODUCT_FIELDS = ["sku", "name", "description", "unit", "status"];
 const normalizeId = (id) => String(id).toLowerCase();
@@ -59,20 +63,175 @@ const normalizedProductValue = (field, value) => {
   return value;
 };
 
-const applyProductStockGuard = async ({ productId, guardStatus, session }) => {
-  if (!guardStatus) return;
+const stockGuardSnapshot = (stock) => ({
+  status: stock.status,
+  productLifecycleStatus: stock.productLifecycleStatus,
+  warehouseLifecycleStatus: stock.warehouseLifecycleStatus,
+});
 
-  await Stock.updateMany(
-    {
-      productId,
-      productLifecycleStatus: { $ne: guardStatus },
-    },
-    {
-      $set: { productLifecycleStatus: guardStatus },
-      $inc: { version: 1 },
-    },
-    { session }
-  );
+const applyProductStockGuard = async ({
+  productId,
+  guardStatus,
+  session,
+  eventCollector,
+  causeProduct,
+}) => {
+  if (!guardStatus) return [];
+
+  const stocks = await Stock.find({
+    productId,
+    productLifecycleStatus: { $ne: guardStatus },
+  })
+    .sort({ _id: 1 })
+    .session(session);
+  const updatedStocks = [];
+
+  for (const stock of stocks) {
+    const updatedStock = await Stock.findOneAndUpdate(
+      { _id: stock._id, version: stock.version },
+      {
+        $set: { productLifecycleStatus: guardStatus },
+        $inc: { version: 1 },
+      },
+      { returnDocument: "after", session, runValidators: true }
+    );
+    if (!updatedStock) throw staleVersionError();
+    updatedStocks.push(updatedStock);
+
+    eventCollector?.recordChange({
+      eventType: "inventory.stock.availability-guard-changed",
+      aggregateType: "Stock",
+      aggregateId: normalizeId(updatedStock._id),
+      aggregateVersion: updatedStock.version,
+      before: buildStockSnapshot(stock),
+      after: buildStockSnapshot(updatedStock),
+      payload: {
+        stockId: normalizeId(updatedStock._id),
+        productId: normalizeId(updatedStock.productId),
+        warehouseId: normalizeId(updatedStock.warehouseId),
+        beforeGuard: stockGuardSnapshot(stock),
+        afterGuard: stockGuardSnapshot(updatedStock),
+        cause: {
+          aggregateType: "Product",
+          aggregateId: normalizeId(causeProduct._id),
+          aggregateVersion: causeProduct.version,
+        },
+        aggregateVersion: updatedStock.version,
+      },
+      reasonCode: "PRODUCT_LIFECYCLE_GUARD_CHANGED",
+      metadata: {
+        causeAggregateType: "Product",
+        causeAggregateId: normalizeId(causeProduct._id),
+      },
+    });
+  }
+
+  return updatedStocks;
+};
+
+const changedSnapshotFields = (before, after) =>
+  Object.keys(after)
+    .filter(
+      (field) =>
+        canonicalFieldValue(before[field]) !== canonicalFieldValue(after[field])
+    )
+    .sort();
+
+const canonicalFieldValue = (value) => JSON.stringify(value);
+
+const recordProductTransition = ({
+  eventCollector,
+  beforeProduct,
+  afterProduct,
+  bulkItemIndex,
+  forceChanged = false,
+  explicitChangedFields,
+}) => {
+  if (!eventCollector) return;
+  const before = beforeProduct ? buildProductSnapshot(beforeProduct) : null;
+  const after = buildProductSnapshot(afterProduct);
+  const metadata = {};
+  if (bulkItemIndex !== undefined) metadata.bulkItemIndex = bulkItemIndex;
+
+  if (
+    before &&
+    !forceChanged &&
+    canonicalFieldValue(before) === canonicalFieldValue(after)
+  ) {
+    eventCollector.recordNoChange({
+      aggregateType: "Product",
+      aggregateId: normalizeId(afterProduct._id),
+      aggregateVersion: afterProduct.version,
+      before,
+      after,
+      metadata,
+    });
+    return;
+  }
+
+  let eventType = "catalog.product.updated";
+  let reasonCode = null;
+  let payload;
+  if (!before) {
+    eventType = "catalog.product.created";
+    payload = {
+      productId: normalizeId(afterProduct._id),
+      sku: afterProduct.sku,
+      status: afterProduct.status,
+      aggregateVersion: afterProduct.version,
+    };
+  } else if (!before.archivedAt && after.archivedAt) {
+    eventType = "catalog.product.archived";
+    reasonCode = "PRODUCT_ARCHIVED";
+    payload = {
+      productId: normalizeId(afterProduct._id),
+      sku: afterProduct.sku,
+      status: afterProduct.status,
+      archiveReason: afterProduct.archiveReason ?? null,
+      aggregateVersion: afterProduct.version,
+    };
+  } else if (before.status === "inactive" && after.status === "active") {
+    eventType = "catalog.product.reactivated";
+    reasonCode = "PRODUCT_REACTIVATED";
+    payload = {
+      productId: normalizeId(afterProduct._id),
+      sku: afterProduct.sku,
+      previousStatus: before.status,
+      status: after.status,
+      aggregateVersion: afterProduct.version,
+    };
+  } else if (before.status === "active" && after.status === "inactive") {
+    eventType = "catalog.product.deactivated";
+    reasonCode = "PRODUCT_DEACTIVATED";
+    payload = {
+      productId: normalizeId(afterProduct._id),
+      sku: afterProduct.sku,
+      previousStatus: before.status,
+      status: after.status,
+      reasonCode,
+      aggregateVersion: afterProduct.version,
+    };
+  } else {
+    payload = {
+      productId: normalizeId(afterProduct._id),
+      sku: afterProduct.sku,
+      changedFields:
+        explicitChangedFields || changedSnapshotFields(before, after),
+      aggregateVersion: afterProduct.version,
+    };
+  }
+
+  eventCollector.recordChange({
+    eventType,
+    aggregateType: "Product",
+    aggregateId: normalizeId(afterProduct._id),
+    aggregateVersion: afterProduct.version,
+    before,
+    after,
+    payload,
+    reasonCode,
+    metadata,
+  });
 };
 
 const buildProductUpdate = ({ product, update, actorId }) => {
@@ -125,6 +284,8 @@ const updateProductInSession = async ({
   update,
   actorId,
   session,
+  eventCollector,
+  bulkItemIndex,
 }) => {
   assertCurrentVersion(product.version);
   assertExpectedVersion(update.expectedVersion);
@@ -139,7 +300,15 @@ const updateProductInSession = async ({
   const { fieldsToSet, fieldsToUnset, guardStatus, changed } =
     buildProductUpdate({ product, update, actorId });
 
-  if (!changed) return product;
+  if (!changed) {
+    recordProductTransition({
+      eventCollector,
+      beforeProduct: product,
+      afterProduct: product,
+      bulkItemIndex,
+    });
+    return product;
+  }
 
   const updateDocument = {
     $set: fieldsToSet,
@@ -162,10 +331,28 @@ const updateProductInSession = async ({
 
   if (!updatedProduct) throw staleVersionError();
 
+  recordProductTransition({
+    eventCollector,
+    beforeProduct: product,
+    afterProduct: updatedProduct,
+    bulkItemIndex,
+    forceChanged: true,
+    explicitChangedFields: [
+      ...new Set([
+        ...Object.keys(fieldsToSet),
+        ...Object.keys(fieldsToUnset),
+      ]),
+    ]
+      .filter((field) => PRODUCT_FIELDS.includes(field))
+      .sort(),
+  });
+
   await applyProductStockGuard({
     productId: product._id,
     guardStatus,
     session,
+    eventCollector,
+    causeProduct: updatedProduct,
   });
 
   return updatedProduct;
@@ -195,6 +382,7 @@ const createProduct = async ({
   unit,
   status,
   session,
+  eventCollector,
 }) => {
   try {
     const existingProductQuery = Product.findOne({ sku });
@@ -213,13 +401,18 @@ const createProduct = async ({
     if (!session) return Product.create(productData);
 
     const [product] = await Product.create([productData], { session });
+    recordProductTransition({ eventCollector, afterProduct: product });
     return product;
   } catch (error) {
     return convertDuplicateError(error);
   }
 };
 
-const createProductsBulk = async ({ products: productsToCreate, session }) => {
+const createProductsBulk = async ({
+  products: productsToCreate,
+  session,
+  eventCollector,
+}) => {
   const skus = productsToCreate.map((product) => product.sku);
 
   if (new Set(skus).size !== skus.length) {
@@ -247,6 +440,13 @@ const createProductsBulk = async ({ products: productsToCreate, session }) => {
       productsToCreate,
       session ? { session } : undefined
     );
+    for (let index = 0; index < products.length; index += 1) {
+      recordProductTransition({
+        eventCollector,
+        afterProduct: products[index],
+        bulkItemIndex: index,
+      });
+    }
     return {
       createdCount: products.length,
       products,
@@ -256,7 +456,13 @@ const createProductsBulk = async ({ products: productsToCreate, session }) => {
   }
 };
 
-const updateProduct = async ({ productId, update, actorId, session }) => {
+const updateProduct = async ({
+  productId,
+  update,
+  actorId,
+  session,
+  eventCollector,
+}) => {
   assertObjectId(productId);
 
   try {
@@ -279,6 +485,7 @@ const updateProduct = async ({ productId, update, actorId, session }) => {
         update,
         actorId,
         session: currentSession,
+        eventCollector,
       });
     };
 
@@ -288,7 +495,12 @@ const updateProduct = async ({ productId, update, actorId, session }) => {
   }
 };
 
-const updateProductsBulk = async ({ updates, actorId, session }) => {
+const updateProductsBulk = async ({
+  updates,
+  actorId,
+  session,
+  eventCollector,
+}) => {
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -364,13 +576,16 @@ const updateProductsBulk = async ({ updates, actorId, session }) => {
       }
 
       const updatedProducts = [];
-      for (const update of updates) {
+      for (let index = 0; index < updates.length; index += 1) {
+        const update = updates[index];
         updatedProducts.push(
           await updateProductInSession({
             product: productById.get(normalizeId(update.id)),
             update,
             actorId,
             session: currentSession,
+            eventCollector,
+            bulkItemIndex: index,
           })
         );
       }
@@ -393,11 +608,13 @@ const deactivateProduct = ({
   expectedVersion,
   deactivationReason,
   session,
+  eventCollector,
 }) =>
   updateProduct({
     productId,
     actorId,
     session,
+    eventCollector,
     update: { status: "inactive", expectedVersion, deactivationReason },
   });
 
@@ -407,6 +624,7 @@ const archiveProduct = async ({
   expectedVersion,
   archiveReason,
   session,
+  eventCollector,
 }) => {
   assertObjectId(productId);
   assertExpectedVersion(expectedVersion);
@@ -451,10 +669,18 @@ const archiveProduct = async ({
 
     if (!archivedProduct) throw staleVersionError();
 
+    recordProductTransition({
+      eventCollector,
+      beforeProduct: product,
+      afterProduct: archivedProduct,
+    });
+
     await applyProductStockGuard({
       productId: product._id,
       guardStatus: "archived",
       session: currentSession,
+      eventCollector,
+      causeProduct: archivedProduct,
     });
 
     return archivedProduct;
@@ -463,7 +689,13 @@ const archiveProduct = async ({
   return session ? execute(session) : withTransaction(execute);
 };
 
-const archiveProductsBulk = async ({ ids, actorId, archiveReason, session }) => {
+const archiveProductsBulk = async ({
+  ids,
+  actorId,
+  archiveReason,
+  session,
+  eventCollector,
+}) => {
   ids.forEach((id) => assertObjectId(id));
   const normalizedIds = ids.map(normalizeId);
 
@@ -504,7 +736,8 @@ const archiveProductsBulk = async ({ ids, actorId, archiveReason, session }) => 
     );
     const reason = normalizeReason(archiveReason);
 
-    for (const id of normalizedIds) {
+    for (let index = 0; index < normalizedIds.length; index += 1) {
+      const id = normalizedIds[index];
       const product = productById.get(id);
       assertCurrentVersion(product.version);
       const fieldsToSet = {
@@ -514,18 +747,31 @@ const archiveProductsBulk = async ({ ids, actorId, archiveReason, session }) => 
       if (actorId) fieldsToSet.archivedBy = actorId;
       if (reason) fieldsToSet.archiveReason = reason;
 
-      const result = await Product.updateOne(
+      const archivedProduct = await Product.findOneAndUpdate(
         { _id: product._id, version: product.version, archivedAt: null },
         { $set: fieldsToSet, $inc: { version: 1 } },
-        { session: currentSession, runValidators: true }
+        {
+          returnDocument: "after",
+          session: currentSession,
+          runValidators: true,
+        }
       );
 
-      if (result.modifiedCount !== 1) throw staleVersionError();
+      if (!archivedProduct) throw staleVersionError();
+
+      recordProductTransition({
+        eventCollector,
+        beforeProduct: product,
+        afterProduct: archivedProduct,
+        bulkItemIndex: index,
+      });
 
       await applyProductStockGuard({
         productId: product._id,
         guardStatus: "archived",
         session: currentSession,
+        eventCollector,
+        causeProduct: archivedProduct,
       });
     }
 

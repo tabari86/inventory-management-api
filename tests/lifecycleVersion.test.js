@@ -342,7 +342,9 @@ describe("Lifecycle and explicit aggregate versions", () => {
     async (parentType) => {
       const { product, warehouse, stock } = await createInventory();
       const propagationError = new Error("simulated guard propagation failure");
-      jest.spyOn(Stock, "updateMany").mockRejectedValueOnce(propagationError);
+      jest
+        .spyOn(Stock, "findOneAndUpdate")
+        .mockRejectedValueOnce(propagationError);
 
       const lifecycleMutation =
         parentType === "Product"

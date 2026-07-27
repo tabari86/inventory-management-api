@@ -35,10 +35,11 @@ const createWarehouse = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, input),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         warehouseService.createWarehouse({
           ...input,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (warehouse) => ({
@@ -67,10 +68,11 @@ const createWarehousesBulk = async (req, res, next) => {
       res,
       statusCode: 201,
       command: commandFor(req, warehousesToCreate),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         warehouseService.createWarehousesBulk({
           warehouses: warehousesToCreate,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({
@@ -105,11 +107,12 @@ const updateWarehousesBulk = async (req, res, next) => {
         req,
         updates.map((update) => ({ ...update, id: normalizeId(update.id) }))
       ),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         warehouseService.updateWarehousesBulk({
           updates,
           actorId: req.user.id,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (data) => ({
@@ -187,12 +190,13 @@ const updateWarehouse = async (req, res, next) => {
       res,
       statusCode: 200,
       command: commandFor(req, update, { id: normalizeId(id) }),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         warehouseService.updateWarehouse({
           warehouseId: id,
           actorId: req.user.id,
           update,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (updatedWarehouse) => ({
@@ -218,12 +222,13 @@ const deactivateWarehouse = async (req, res, next) => {
       res,
       statusCode: 200,
       command: commandFor(req, input, { id: normalizeId(req.params.id) }),
-      execute: ({ session }) =>
+      execute: ({ session, eventCollector }) =>
         warehouseService.deactivateWarehouse({
           warehouseId: req.params.id,
           actorId: req.user.id,
           ...input,
           session,
+          eventCollector,
           context: req.applicationContext,
         }),
       buildResponse: (updatedWarehouse) => ({

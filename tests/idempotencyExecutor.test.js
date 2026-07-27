@@ -1,19 +1,33 @@
 const mongoose = require("mongoose");
 
 const IdempotencyRecord = require("../src/models/IdempotencyRecord");
+const AuditEvent = require("../src/models/AuditEvent");
+const OutboxEvent = require("../src/models/OutboxEvent");
 const Product = require("../src/models/Product");
+const Stock = require("../src/models/Stock");
+const StockMovement = require("../src/models/StockMovement");
+const Warehouse = require("../src/models/Warehouse");
 const {
   executeInventoryMutation,
   serializeResponse,
 } = require("../src/services/idempotencyExecutor");
 const { buildCanonicalCommand, hashCanonicalCommand } = require("../src/utils/canonicalJson");
 const { hashIdempotencyKey } = require("../src/utils/idempotencyHash");
+const { buildProductSnapshot } = require("../src/services/eventSnapshots");
+const {
+  createDomainEventCollector,
+} = require("../src/services/domainEventCollector");
+const {
+  persistAuditOutboxEvents,
+} = require("../src/services/auditOutboxService");
+const inventoryService = require("../src/services/inventoryService");
 
 require("./setupTestDb");
 
 const context = {
   requestId: "018f71c3-6aea-48e1-9e0f-098c0306d9ad",
   correlationId: "executor-test",
+  causationId: "018f71c3-6aea-48e1-9e0f-098c0306d9ad",
   source: "http-api",
   actor: {
     type: "user",
@@ -27,11 +41,27 @@ const command = buildCanonicalCommand({
   normalizedBody: { sku: "EXEC-001", name: "Executor product" },
 });
 
-const executeProduct = ({ session }) =>
-  Product.create(
+const executeProduct = async ({ session, eventCollector }) => {
+  const [product] = await Product.create(
     [{ sku: "EXEC-001", name: "Executor product" }],
     { session }
-  ).then(([product]) => product);
+  );
+  eventCollector.recordChange({
+    eventType: "catalog.product.created",
+    aggregateType: "Product",
+    aggregateId: product._id.toString(),
+    aggregateVersion: product.version,
+    before: null,
+    after: buildProductSnapshot(product),
+    payload: {
+      productId: product._id.toString(),
+      sku: product.sku,
+      status: product.status,
+      aggregateVersion: product.version,
+    },
+  });
+  return product;
+};
 
 const execute = (overrides = {}) =>
   executeInventoryMutation({
@@ -116,6 +146,8 @@ describe("idempotency executor failure and storage boundaries", () => {
 
     expect(await Product.countDocuments()).toBe(0);
     expect(await IdempotencyRecord.countDocuments()).toBe(0);
+    expect(await AuditEvent.countDocuments()).toBe(0);
+    expect(await OutboxEvent.countDocuments()).toBe(0);
   });
 
   it("rejects circular response serialization and rolls back all writes", async () => {
@@ -131,6 +163,8 @@ describe("idempotency executor failure and storage boundaries", () => {
     });
     expect(await Product.countDocuments()).toBe(0);
     expect(await IdempotencyRecord.countDocuments()).toBe(0);
+    expect(await AuditEvent.countDocuments()).toBe(0);
+    expect(await OutboxEvent.countDocuments()).toBe(0);
   });
 
   it("rolls back the domain write when record completion fails", async () => {
@@ -147,41 +181,109 @@ describe("idempotency executor failure and storage boundaries", () => {
     await expect(execute()).rejects.toThrow("Injected completion failure");
     expect(await Product.countDocuments()).toBe(0);
     expect(await IdempotencyRecord.countDocuments()).toBe(0);
+    expect(await AuditEvent.countDocuments()).toBe(0);
+    expect(await OutboxEvent.countDocuments()).toBe(0);
   });
 
-  it("recreates transaction callback state after a transient retry", async () => {
-    let attempts = 0;
-    const retriedExecute = async ({ session }) => {
-      attempts += 1;
-      const [currentProduct] = await Product.create(
-        [{ sku: "EXEC-RETRY", name: "Retry product" }],
-        { session }
-      );
+  it("recreates collectors and event IDs after a persisted transient attempt aborts", async () => {
+    const product = await Product.create({ sku: "EXEC-RETRY", name: "Retry" });
+    const warehouse = await Warehouse.create({ code: "EXEC-RETRY-W", name: "Retry" });
+    const stock = await Stock.create({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: 0,
+    });
+    const retryOperationId = "inventory.goods-receipt.single.v1";
+    const retryCommand = buildCanonicalCommand({
+      operationId: retryOperationId,
+      normalizedBody: {
+        stockId: stock._id.toString(),
+        quantity: 4,
+        reference: "RETRY-RECEIPT",
+      },
+    });
+    const collectors = [];
+    const persistedAttempts = [];
+    let completionAttempts = 0;
 
-      if (attempts === 1) {
-        const transient = new mongoose.mongo.MongoServerError({
-          message: "Injected transient transaction error",
-          code: 251,
-        });
-        transient.addErrorLabel("TransientTransactionError");
-        throw transient;
-      }
-
-      return currentProduct;
-    };
-
-    const outcome = await execute({
-      command: buildCanonicalCommand({
-        operationId,
-        normalizedBody: { sku: "EXEC-RETRY", name: "Retry product" },
-      }),
-      execute: retriedExecute,
+    const outcome = await executeInventoryMutation({
+      context,
+      inventoryOperation: {
+        operationId: retryOperationId,
+        keyHash: hashIdempotencyKey("executor.retry-key"),
+      },
+      command: retryCommand,
+      statusCode: 201,
+      execute: ({ session, eventCollector }) =>
+        inventoryService.createGoodsReceipt({
+          stockId: stock._id.toString(),
+          quantity: 4,
+          reference: "RETRY-RECEIPT",
+          session,
+          eventCollector,
+        }),
+      buildResponse: (data) => ({ message: "received", data }),
+      dependencies: {
+        eventCollectorFactory: () => {
+          const collector = createDomainEventCollector();
+          collectors.push(collector);
+          return collector;
+        },
+        eventPersistence: async (args) => {
+          const persisted = await persistAuditOutboxEvents(args);
+          persistedAttempts.push(persisted);
+          return persisted;
+        },
+        now: () => {
+          completionAttempts += 1;
+          if (completionAttempts === 1) {
+            const transient = new mongoose.mongo.MongoServerError({
+              message: "Injected transient transaction error",
+              code: 251,
+            });
+            transient.addErrorLabel("TransientTransactionError");
+            throw transient;
+          }
+          return new Date("2026-07-27T12:00:00.000Z");
+        },
+      },
     });
 
     expect(outcome.statusCode).toBe(201);
-    expect(attempts).toBe(2);
+    expect(outcome.body.message).toBe("received");
+    expect(completionAttempts).toBe(2);
+    expect(collectors).toHaveLength(2);
+    expect(collectors[0]).not.toBe(collectors[1]);
+    expect(collectors.map((collector) => collector.descriptors().length)).toEqual([
+      1,
+      1,
+    ]);
+    expect(persistedAttempts).toHaveLength(2);
+    expect(persistedAttempts[0].auditEventIds).not.toEqual(
+      persistedAttempts[1].auditEventIds
+    );
+    expect(persistedAttempts[0].outboxEventIds).not.toEqual(
+      persistedAttempts[1].outboxEventIds
+    );
+    expect(
+      await AuditEvent.countDocuments({
+        auditEventId: { $in: persistedAttempts[0].auditEventIds },
+      })
+    ).toBe(0);
+    expect(
+      await OutboxEvent.countDocuments({
+        eventId: { $in: persistedAttempts[0].outboxEventIds },
+      })
+    ).toBe(0);
     expect(await Product.countDocuments()).toBe(1);
+    expect(await StockMovement.countDocuments()).toBe(1);
+    expect(await Stock.findById(stock._id).lean()).toMatchObject({
+      quantity: 4,
+      version: 2,
+    });
     expect(await IdempotencyRecord.countDocuments({ state: "completed" })).toBe(1);
+    expect(await AuditEvent.countDocuments()).toBe(1);
+    expect(await OutboxEvent.countDocuments()).toBe(1);
   });
 
   it("stores an immutable plain response snapshot rather than a live document", async () => {
