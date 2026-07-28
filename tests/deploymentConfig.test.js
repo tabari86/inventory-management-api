@@ -39,4 +39,12 @@ describe("Deployment configuration", () => {
     expect(compose).toContain("rs.initiate");
     expect(compose).toContain("mongo_data:/data/db");
   });
+
+  it("keeps existing Render and Compose liveness paths compatible", () => {
+    const render = readRepositoryFile("render.yaml");
+    const compose = readRepositoryFile("docker-compose.yml");
+
+    expect(render).toContain("healthCheckPath: /health");
+    expect(compose).toContain("http://localhost:3000/health");
+  });
 });

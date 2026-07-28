@@ -1,10 +1,13 @@
 const request = require("supertest");
 
 const app = require("../src/app");
+const { createApp } = require("../src/app");
+const AuditEvent = require("../src/models/AuditEvent");
+const OutboxEvent = require("../src/models/OutboxEvent");
 const Product = require("../src/models/Product");
 const productService = require("../src/services/productService");
 const {
-  isValidCorrelationId,
+  isValidContextId,
 } = require("../src/middleware/requestContext");
 const {
   createManagerToken,
@@ -13,11 +16,14 @@ const {
 
 require("./setupTestDb");
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const expectContextHeaders = (response) => {
-  expect(response.headers["x-request-id"]).toMatch(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  expect(response.headers["x-request-id"]).toMatch(/^[A-Za-z0-9._:-]{1,128}$/);
+  expect(response.headers["x-correlation-id"]).toMatch(
+    /^[A-Za-z0-9._:-]{1,128}$/
   );
-  expect(response.headers["x-correlation-id"]).toBeDefined();
 };
 
 describe("request context", () => {
@@ -25,25 +31,37 @@ describe("request context", () => {
     jest.restoreAllMocks();
   });
 
-  it("generates a fresh server request ID and defaults correlation to it", async () => {
-    const first = await request(app)
-      .get("/health")
-      .set("X-Request-ID", "client-controlled-request-id");
-    const second = await request(app).get("/health");
+  it("preserves a valid request ID and safely generates a missing context", async () => {
+    const inboundRequestId = "request:2026-07-27.001";
+    const preserved = await request(app)
+      .get("/health/live")
+      .set("X-Request-ID", inboundRequestId);
+    const generated = await request(app).get("/health");
 
-    expectContextHeaders(first);
-    expect(first.headers["x-request-id"]).not.toBe(
-      "client-controlled-request-id"
+    expect(preserved.headers["x-request-id"]).toBe(inboundRequestId);
+    expect(preserved.headers["x-correlation-id"]).toBe(inboundRequestId);
+    expect(generated.headers["x-request-id"]).toMatch(UUID_PATTERN);
+    expect(generated.headers["x-correlation-id"]).toBe(
+      generated.headers["x-request-id"]
     );
-    expect(first.headers["x-correlation-id"]).toBe(
-      first.headers["x-request-id"]
-    );
-    expect(second.headers["x-request-id"]).not.toBe(
-      first.headers["x-request-id"]
+    expect(generated.headers["x-request-id"]).not.toBe(inboundRequestId);
+  });
+
+  it("replaces an invalid request ID without reflecting it", async () => {
+    const invalidRequestId = "r".repeat(129);
+    const response = await request(app)
+      .get("/health/live")
+      .set("X-Request-ID", invalidRequestId);
+
+    expect(response.status).toBe(200);
+    expect(response.headers["x-request-id"]).toMatch(UUID_PATTERN);
+    expect(response.headers["x-request-id"]).not.toBe(invalidRequestId);
+    expect(response.headers["x-correlation-id"]).toBe(
+      response.headers["x-request-id"]
     );
   });
 
-  it("accepts a valid correlation ID and passes plain context with auth actor", async () => {
+  it("accepts valid IDs and preserves Audit/Outbox causation with the auth actor", async () => {
     const token = await createManagerToken();
     const original = productService.createProduct;
     let observedContext;
@@ -55,15 +73,17 @@ describe("request context", () => {
     const response = await request(app)
       .post("/api/products")
       .set("Authorization", `Bearer ${token}`)
+      .set("X-Request-ID", "request:product-create.001")
       .set("X-Correlation-ID", "order:2026-07-26.001")
       .send({ sku: "CTX-001", name: "Context product" });
 
     expect(response.status).toBe(201);
+    expect(response.headers["x-request-id"]).toBe("request:product-create.001");
     expect(response.headers["x-correlation-id"]).toBe("order:2026-07-26.001");
     expect(observedContext).toEqual({
-      requestId: response.headers["x-request-id"],
+      requestId: "request:product-create.001",
       correlationId: "order:2026-07-26.001",
-      causationId: response.headers["x-request-id"],
+      causationId: "request:product-create.001",
       source: "http-api",
       actor: {
         type: "user",
@@ -72,6 +92,14 @@ describe("request context", () => {
     });
     expect(observedContext).not.toHaveProperty("email");
     expect(observedContext).not.toHaveProperty("role");
+
+    const audit = await AuditEvent.findOne().lean();
+    const outbox = await OutboxEvent.findOne().lean();
+    for (const event of [audit, outbox]) {
+      expect(event.requestId).toBe("request:product-create.001");
+      expect(event.correlationId).toBe("order:2026-07-26.001");
+      expect(event.causationId).toBe("request:product-create.001");
+    }
   });
 
   it.each([
@@ -79,21 +107,27 @@ describe("request context", () => {
     "comma,value",
     "",
     "a".repeat(129),
-  ])("rejects invalid correlation value %j before mutation", async (value) => {
+  ])("replaces invalid correlation value %j with a safe fallback", async (value) => {
+    const token = await createManagerToken();
     const response = await request(app)
       .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
       .set("X-Correlation-ID", value)
       .send({ sku: "CTX-BLOCKED", name: "Blocked" });
 
-    expect(response.status).toBe(400);
-    expect(response.body).toEqual({ message: "Invalid X-Correlation-ID header" });
+    expect(response.status).toBe(201);
     expectContextHeaders(response);
-    expect(await Product.countDocuments()).toBe(0);
+    expect(response.headers["x-request-id"]).toMatch(UUID_PATTERN);
+    expect(response.headers["x-correlation-id"]).toBe(
+      response.headers["x-request-id"]
+    );
+    expect(response.headers["x-correlation-id"]).not.toBe(value);
+    expect(await Product.countDocuments()).toBe(1);
   });
 
-  it("rejects multiple and control-style correlation values at the validator boundary", () => {
+  it("rejects multiple and control-style context values at the validator boundary", () => {
     expect(
-      isValidCorrelationId({
+      isValidContextId({
         present: true,
         validCardinality: false,
         value: "one",
@@ -107,7 +141,7 @@ describe("request context", () => {
       "",
     ]) {
       expect(
-        isValidCorrelationId({
+        isValidContextId({
           present: true,
           validCardinality: true,
           value,
@@ -116,10 +150,12 @@ describe("request context", () => {
     }
   });
 
-  it("sets context headers on auth, RBAC, validation, domain, and unmatched paths", async () => {
+  it("sets context headers on health, auth, RBAC, validation, domain, and unmatched paths", async () => {
     const managerToken = await createManagerToken();
     const viewerToken = await createViewerToken();
     const responses = [
+      await request(app).get("/health/live"),
+      await request(app).get("/health/ready"),
       await request(app).get("/api/products"),
       await request(app)
         .post("/api/products")
@@ -136,7 +172,28 @@ describe("request context", () => {
       await request(app).get("/not-a-route"),
     ];
 
-    expect(responses.map(({ status }) => status)).toEqual([401, 403, 400, 404, 404]);
+    expect(responses.map(({ status }) => status)).toEqual([
+      200, 503, 401, 403, 400, 404, 404,
+    ]);
     responses.forEach(expectContextHeaders);
+  });
+
+  it("exposes only authenticated actor type and ID to request logging", async () => {
+    const token = await createViewerToken();
+    const logger = { log: jest.fn() };
+    const loggedApp = createApp({ logger });
+
+    const response = await request(loggedApp)
+      .get("/api/products")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(response.status).toBe(200);
+    expect(logger.log).toHaveBeenCalledTimes(1);
+    const [event, fields] = logger.log.mock.calls[0];
+    expect(event).toBe("http_request_completed");
+    expect(fields.actor).toEqual({ type: "user", id: expect.any(String) });
+    expect(fields.actor).not.toHaveProperty("email");
+    expect(fields.actor).not.toHaveProperty("name");
+    expect(fields.actor).not.toHaveProperty("role");
   });
 });

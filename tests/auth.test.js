@@ -1,6 +1,7 @@
 const request = require("supertest");
 
 const app = require("../src/app");
+const { logger } = require("../src/config/logger");
 const RefreshToken = require("../src/models/RefreshToken");
 const {
   createAccessToken,
@@ -213,10 +214,10 @@ describe("Auth API", () => {
       password: "Password123",
     };
     await createTestUser(credentials);
-    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = jest.spyOn(logger, "log");
     jest
       .spyOn(RefreshToken, "updateMany")
-      .mockRejectedValueOnce(new Error("simulated cleanup failure"));
+      .mockRejectedValueOnce(new Error("PRIVATE_CLEANUP_FAILURE_MARKER"));
 
     const loginResponse = await request(app)
       .post("/api/auth/login")
@@ -227,8 +228,18 @@ describe("Auth API", () => {
 
     expect(loginResponse.statusCode).toBe(200);
     expect(refreshResponse.statusCode).toBe(200);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Could not revoke previous refresh tokens")
+    expect(logSpy).toHaveBeenCalledWith(
+      "application_error",
+      expect.objectContaining({
+        requestId: expect.any(String),
+        correlationId: expect.any(String),
+        statusCode: 500,
+        errorCode: "REFRESH_TOKEN_REVOCATION_FAILED",
+        retryable: true,
+      })
+    );
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain(
+      "PRIVATE_CLEANUP_FAILURE_MARKER"
     );
   });
 

@@ -1,6 +1,7 @@
 const DomainError = require("../src/errors/DomainError");
 const errorCodes = require("../src/errors/errorCodes");
 const errorHandler = require("../src/middleware/errorHandler");
+const { createErrorHandler } = require("../src/middleware/errorHandler");
 
 describe("Global error handler", () => {
   const originalNodeEnv = process.env.NODE_ENV;
@@ -92,5 +93,44 @@ describe("Global error handler", () => {
     expect(response.json.mock.calls[0][0]).not.toHaveProperty("code");
     expect(response.json.mock.calls[0][0]).not.toHaveProperty("retryable");
     expect(response.json.mock.calls[0][0]).not.toHaveProperty("cause");
+  });
+
+  it("passes only safe typed error context to structured logging", () => {
+    process.env.NODE_ENV = "production";
+    const response = createResponse();
+    const logger = { log: jest.fn() };
+    const handler = createErrorHandler(logger);
+    const privateMarker = "mongodb://user:password@private-host/database";
+    const error = new DomainError({
+      code: errorCodes.DEPENDENCY_UNAVAILABLE,
+      httpStatus: 503,
+      message: "Inventory dependency is unavailable",
+      retryable: true,
+      cause: new Error(privateMarker),
+    });
+
+    handler(
+      error,
+      {
+        applicationContext: {
+          requestId: "request-004",
+          correlationId: "correlation-004",
+        },
+      },
+      response,
+      jest.fn()
+    );
+
+    expect(logger.log).toHaveBeenCalledWith("application_error", {
+      requestId: "request-004",
+      correlationId: "correlation-004",
+      statusCode: 503,
+      errorCode: errorCodes.DEPENDENCY_UNAVAILABLE,
+      retryable: true,
+    });
+    expect(JSON.stringify(logger.log.mock.calls)).not.toContain(privateMarker);
+    expect(response.json).toHaveBeenCalledWith({
+      message: "Internal server error",
+    });
   });
 });

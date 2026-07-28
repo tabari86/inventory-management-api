@@ -4,6 +4,7 @@ const User = require("../models/User");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const RefreshToken = require("../models/RefreshToken");
+const { logger } = require("../config/logger");
 
 const loginUser = async (req, res, next) => {
   try {
@@ -66,10 +67,14 @@ const loginUser = async (req, res, next) => {
         },
         { $set: { isRevoked: true } }
       );
-    } catch (revocationError) {
-      console.error(
-        `Could not revoke previous refresh tokens: ${revocationError.message}`
-      );
+    } catch (_revocationError) {
+      logger.log("application_error", {
+        requestId: req.applicationContext?.requestId,
+        correlationId: req.applicationContext?.correlationId,
+        statusCode: 500,
+        errorCode: "REFRESH_TOKEN_REVOCATION_FAILED",
+        retryable: true,
+      });
     }
 
     return res.status(200).json({

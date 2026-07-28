@@ -72,6 +72,7 @@ Note: The service runs on Render's free plan, so the first request after inactiv
 - express-validator
 - helmet
 - express-rate-limit
+- pino
 - swagger-jsdoc
 - swagger-ui-express
 - @apidevtools/swagger-parser
@@ -83,6 +84,31 @@ Note: The service runs on Render's free plan, so the first request after inactiv
 - GitHub Actions
 - Render
 - MongoDB Atlas
+
+---
+
+## Operational Readiness
+
+The executable server awaits the required MongoDB connection before opening
+the HTTP listener. A failed startup never marks the runtime ready and exits
+with a non-zero status without leaving a listener active.
+
+- `GET /health/live` is the canonical liveness check and does not query or
+  depend on MongoDB. `GET /health` remains its backward-compatible alias.
+- `GET /health/ready` is the canonical readiness check. It returns `200` only
+  after startup and listening complete, MongoDB is connected, traffic is being
+  accepted, and shutdown has not started. `GET /api/ready` is a compatibility
+  readiness alias added by WP6.
+- `SIGTERM` and `SIGINT` first make readiness unavailable, then close the HTTP
+  server and MongoDB connection. The sequence is idempotent and bounded to ten
+  seconds; timeout forces remaining HTTP connections closed and exits non-zero.
+- Runtime and HTTP terminal logs are one JSON object per line on standard
+  output. They contain only allowlisted operational fields. Request/response
+  bodies, query values, credentials, cookies, tokens, raw idempotency keys,
+  user profile fields, database URIs, and production stack traces are excluded.
+- A valid inbound `X-Request-ID` or `X-Correlation-ID` is preserved. Missing or
+  invalid values are replaced safely, correlation defaults to the effective
+  request ID, and every response exposes both effective headers.
 
 ---
 
@@ -655,18 +681,21 @@ versioned API contract.
 
 Transactions provide atomic database persistence and driver retry safety.
 Inventory Core mutation routes additionally support optional, actor-scoped
-idempotency for retry-safe HTTP execution. AuditEvent, OutboxEvent, machine
-identity, and API versioning remain future work.
+idempotency for retry-safe HTTP execution. AuditEvent and OutboxEvent already
+exist and are persisted inside the same mutation transaction. Outbox delivery,
+machine identity, and API versioning remain future work.
 
 ### Request context and optional idempotency
 
-Every HTTP attempt receives a server-generated UUID in `X-Request-ID`. A valid
-incoming `X-Correlation-ID` (1-128 characters matching
-`^[A-Za-z0-9._:-]+$`) is propagated; when omitted it defaults to the request
-ID. Invalid correlation values fail with 400 before authentication or mutation.
-Both values live in an explicit plain application context. Authentication adds
-only the current user actor type and ID; tokens, roles, names, and email are not
-copied into persistence context.
+A valid inbound `X-Request-ID` or `X-Correlation-ID` is preserved when it is
+1-128 characters matching `^[A-Za-z0-9._:-]+$`. A missing or invalid request ID
+is replaced with a generated UUID. A missing or invalid correlation ID defaults
+to the effective request ID; invalid context values are not reflected or
+logged, and they do not produce HTTP 400. Every application response exposes
+the effective IDs in `X-Request-ID` and `X-Correlation-ID`. Both values live in
+an explicit plain application context, and HTTP `causationId` remains the
+effective request ID. Authentication adds only the current user actor type and
+ID; tokens, roles, names, and email are not copied into persistence context.
 
 All Product, Warehouse, Stock, Goods Receipt, and Goods Issue mutation routes
 accept an optional `Idempotency-Key`. Keys are case-sensitive, 8-128 characters,
@@ -1162,7 +1191,8 @@ Possible future improvements:
 - database-level enforcement for one active admin if required
 - future domain migrations beyond the lifecycle/version cutover
 - distributed rate limiting for multi-instance deployments
-- AuditEvent and OutboxEvent integration using the existing request context
+- a separately approved Outbox delivery worker
+- machine identity and API versioning
 
 ---
 

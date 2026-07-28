@@ -171,12 +171,13 @@ driver callback retry does not accumulate versions or response arrays.
 
 ## Request Context
 
-The first application middleware generates a new `X-Request-ID` UUID for every
-HTTP attempt and never trusts an inbound request ID. `X-Correlation-ID` accepts
-one 1-128 character value matching `^[A-Za-z0-9._:-]+$`; otherwise the request
-fails with 400. When omitted, correlation defaults to the request ID. Both
-headers are written before parsing, authentication, or routing so success and
-error paths carry them.
+The first application middleware accepts one inbound `X-Request-ID` and
+`X-Correlation-ID` only when each is 1-128 characters matching
+`^[A-Za-z0-9._:-]+$`. A missing, repeated, overlong, or otherwise invalid
+request ID is replaced with a UUID. An invalid or missing correlation ID
+defaults to the effective request ID. Raw invalid values are neither reflected
+nor logged. Both effective headers are written before parsing, authentication,
+or routing so success and error paths carry them.
 
 The context passed explicitly through controllers and application services is:
 
@@ -187,8 +188,63 @@ The context passed explicitly through controllers and application services is:
 Authentication supplies the actor from the validated User record. The context
 does not contain raw headers, JWTs, roles, email, or names. There is no
 AsyncLocalStorage or mutable global request state. For HTTP mutations,
-`causationId` is the server-generated request ID; inbound causation headers are
-not accepted.
+`causationId` is the effective request ID; inbound causation headers are not
+accepted.
+
+## Runtime Operations
+
+The Express app remains independently importable and does not connect, listen,
+register signal handlers, or exit during import. The executable entry point
+owns the process lifecycle:
+
+```text
+validate environment
+  -> mark starting and connect to MongoDB
+  -> await the required connection
+  -> open and confirm the HTTP listener
+  -> mark accepting traffic
+  -> emit application_ready
+```
+
+One small process-local lifecycle instance represents `starting`, `ready`,
+`shutting_down`, `stopped`, and `failed`. Readiness requires both its accepting
+traffic state and Mongoose `readyState === 1`; a stored boolean therefore cannot
+mask a database disconnect. `/health/live` and legacy `/health` are independent
+of MongoDB. `/health/ready` and the WP6 compatibility readiness alias
+`/api/ready` return a bounded `503` response while starting, disconnected, or
+shutting down. All four routes are public and run after request-context
+creation.
+
+`SIGTERM` and `SIGINT` share one shutdown promise:
+
+```text
+mark shutting_down
+  -> stop accepting new HTTP connections
+  -> await active HTTP requests and close the listener
+  -> close Mongoose
+  -> mark stopped and exit successfully
+```
+
+The sequence has a fixed ten-second bound. On timeout it force-closes remaining
+HTTP connections when the Node.js server supports that operation, makes one
+best-effort database close, records a sanitized timeout event, and exits
+non-zero. Repeated signals cannot close either resource twice.
+
+Pino writes structured application and HTTP terminal records as one JSON
+object per line. Event-specific allowlists admit request/correlation IDs,
+method, normalized route or query-free path, final status, monotonic duration,
+authenticated actor type/ID, safe error code/retryability, and operational
+lifecycle fields. Logger redaction provides a second defense for sensitive key
+names. Raw request/response objects, bodies, headers, query values, credentials,
+tokens, cookies, user names/emails/roles, database URIs, raw idempotency keys,
+and production stacks do not cross the logging boundary. A response `finish`
+emits `http_request_completed`; a preceding connection `close` instead emits
+`http_request_aborted`. Both paths share one terminal guard.
+
+Operational logs are not `AuditEvent` records and do not participate in domain
+transactions. They do not write to MongoDB or create `OutboxEvent` records.
+Transactional Audit/Outbox persistence remains the authoritative business
+change record, and Outbox delivery remains deliberately deferred.
 
 ## Inventory Mutation Idempotency
 

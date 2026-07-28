@@ -78,6 +78,28 @@ const swaggerOptions = {
             },
           },
         },
+        LivenessResponse: {
+          type: "object",
+          required: ["status", "service"],
+          properties: {
+            status: { type: "string", enum: ["ok"] },
+            service: {
+              type: "string",
+              enum: ["inventory-management-api"],
+            },
+          },
+        },
+        ReadinessResponse: {
+          type: "object",
+          required: ["status", "service"],
+          properties: {
+            status: { type: "string", enum: ["ready", "unavailable"] },
+            service: {
+              type: "string",
+              enum: ["inventory-management-api"],
+            },
+          },
+        },
         Product: {
           type: "object",
           description:
@@ -329,12 +351,25 @@ const swaggerSpec = swaggerJsdoc(swaggerOptions);
 
 swaggerSpec.components.parameters = {
   ...(swaggerSpec.components.parameters || {}),
+  RequestId: {
+    name: "X-Request-ID",
+    in: "header",
+    required: false,
+    description:
+      "Provides a caller request identifier when it is a valid 1-128 character context value. Invalid or missing values are replaced with a server-generated UUID.",
+    schema: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[A-Za-z0-9._:-]+$",
+    },
+  },
   CorrelationId: {
     name: "X-Correlation-ID",
     in: "header",
     required: false,
     description:
-      "Identifies a caller-provided operation chain. A valid value is echoed in responses; when absent, it defaults to the server-generated request ID. Invalid values return 400. It does not define idempotency identity, and changing it does not prevent same-payload replay.",
+      "Identifies a caller-provided operation chain. A valid value is echoed in responses; an invalid or missing value defaults to the effective request ID. It does not define idempotency identity, and changing it does not prevent same-payload replay.",
     schema: {
       type: "string",
       minLength: 1,
@@ -360,12 +395,18 @@ swaggerSpec.components.parameters = {
 swaggerSpec.components.headers = {
   ...(swaggerSpec.components.headers || {}),
   XRequestId: {
-    description: "Server-generated UUID for this HTTP attempt.",
-    schema: { type: "string", format: "uuid" },
+    description:
+      "Accepted valid caller request ID, or a server-generated UUID when missing or invalid.",
+    schema: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      pattern: "^[A-Za-z0-9._:-]+$",
+    },
   },
   XCorrelationId: {
     description:
-      "Accepted valid client correlation ID, or the server request ID when omitted.",
+      "Accepted valid client correlation ID, or the effective request ID when missing or invalid.",
     schema: {
       type: "string",
       minLength: 1,
@@ -416,7 +457,14 @@ const mergeErrorCodes = (response, extension, errorCodes) => {
 for (const pathItem of Object.values(swaggerSpec.paths)) {
   for (const [method, operation] of Object.entries(pathItem)) {
     if (!httpMethods.has(method) || !operation.responses) continue;
+    const requestIdReference = "#/components/parameters/RequestId";
     const correlationReference = "#/components/parameters/CorrelationId";
+    if (!hasHeaderParameter(operation, "X-Request-ID", requestIdReference)) {
+      operation.parameters = [
+        ...(operation.parameters || []),
+        { $ref: requestIdReference },
+      ];
+    }
     if (
       !hasHeaderParameter(operation, "X-Correlation-ID", correlationReference)
     ) {
@@ -425,22 +473,6 @@ for (const pathItem of Object.values(swaggerSpec.paths)) {
         { $ref: correlationReference },
       ];
     }
-
-    operation.responses["400"] ||= {
-      description: "Invalid X-Correlation-ID header",
-      content: {
-        "application/json": {
-          schema: {
-            $ref: "#/components/schemas/ErrorResponse",
-          },
-        },
-      },
-    };
-    mergeErrorCodes(
-      operation.responses["400"],
-      "x-request-context-errors",
-      ["INVALID_CORRELATION_ID"]
-    );
 
     for (const response of Object.values(operation.responses)) {
       response.headers = {
@@ -465,7 +497,7 @@ for (const { method, path, operationId } of mutationOperationRegistry) {
       { $ref: idempotencyReference },
     ];
   }
-  operation.description = `${operation.description || ""} Optional idempotency is evaluated after current authentication, authorization, and normalized validation. Successful 2xx responses are stored atomically for exact replay for seven days; conflicting payloads or an unresolved concurrent request return 409. Invalid correlation or idempotency headers return 400.`.trim();
+  operation.description = `${operation.description || ""} Optional idempotency is evaluated after current authentication, authorization, and normalized validation. Successful 2xx responses are stored atomically for exact replay for seven days; conflicting payloads or an unresolved concurrent request return 409. Invalid idempotency headers return 400; invalid request or correlation IDs are replaced with safe effective values.`.trim();
   operation["x-idempotency-errors"] = {
     invalidHeaders: "400",
     conflictingPayload: "409",
@@ -477,7 +509,6 @@ for (const { method, path, operationId } of mutationOperationRegistry) {
     description: "Idempotency conflict or unresolved in-progress request",
   };
   mergeErrorCodes(operation.responses["400"], "x-idempotency-errors", [
-    "INVALID_CORRELATION_ID",
     "INVALID_IDEMPOTENCY_KEY",
   ]);
   mergeErrorCodes(operation.responses["409"], "x-idempotency-errors", [

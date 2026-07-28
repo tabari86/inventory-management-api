@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 
+const { logger: defaultLogger } = require("./logger");
+
 const parseNonNegativeInteger = (value, fallback) => {
   const parsedValue = Number.parseInt(value, 10);
 
@@ -13,7 +15,11 @@ const wait = (delayMs) =>
     setTimeout(resolve, delayMs);
   });
 
-const connectDatabase = async () => {
+const connectDatabase = async ({
+  logger = defaultLogger,
+  connect = mongoose.connect.bind(mongoose),
+  waitFn = wait,
+} = {}) => {
   const maxRetries = parseNonNegativeInteger(
     process.env.DB_CONNECT_RETRIES,
     2
@@ -25,24 +31,32 @@ const connectDatabase = async () => {
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      await mongoose.connect(process.env.MONGODB_URI);
+      await connect(process.env.MONGODB_URI);
 
-      console.log("MongoDB connected");
-      return;
-    } catch (error) {
-      console.error(
-        `Database connection attempt ${attempt + 1} failed: ${error.message}`
-      );
+      logger.log("database_connected", { attempt: attempt + 1 });
+      return mongoose.connection;
+    } catch (_error) {
+      const retrying = attempt < maxRetries;
+      logger.log("database_connection_attempt_failed", {
+        attempt: attempt + 1,
+        maxAttempts: maxRetries + 1,
+        retrying,
+      });
 
       if (attempt === maxRetries) {
-        console.error("Database connection failed after all attempts");
-        process.exit(1);
-        return;
+        throw new Error("Database connection failed");
       }
 
-      console.log(`Retrying database connection in ${retryDelayMs}ms`);
-      await wait(retryDelayMs);
+      await waitFn(retryDelayMs);
     }
   }
 };
+
+const closeDatabase = async () => {
+  if (mongoose.connection.readyState === 0) return;
+  await mongoose.connection.close();
+};
+
 module.exports = connectDatabase;
+module.exports.closeDatabase = closeDatabase;
+module.exports.parseNonNegativeInteger = parseNonNegativeInteger;

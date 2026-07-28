@@ -171,3 +171,49 @@ are backfilled; event history begins at cutover. Pending OutboxEvents accumulate
 until a future delivery worker is deliberately designed and deployed. Audit
 retention and delivered-Outbox retention remain deferred policy decisions; no
 TTL or cleanup task is included.
+
+## Operational runtime deployment
+
+Work Package 6 changes process startup, health reporting, shutdown, request
+context validation, and standard-output logging only. It adds no model, schema,
+index, collection, backfill, or production data change, and no migration is
+required.
+
+Render remains compatible with the existing `healthCheckPath: /health` setting;
+that path is the legacy liveness alias and does not depend on MongoDB. The
+canonical liveness path is `/health/live`. Canonical readiness is
+`/health/ready`, while `/api/ready` is a compatibility readiness alias added by
+WP6. Readiness depends on completed startup, an active Mongoose connection,
+accepted traffic, and shutdown not having started.
+
+The server now awaits MongoDB before listening. If required configuration or
+database startup fails, no listener remains active and the process exits
+non-zero after a sanitized structured log. Render can therefore restart the
+failed instance according to its platform policy without receiving a false
+ready signal.
+
+Render sends `SIGTERM` during shutdown. `SIGTERM` and `SIGINT` both make the
+application unready before stopping new traffic, then allow the HTTP server to
+close before closing Mongoose. The sequence is single-flight and bounded to ten
+seconds. A timeout force-closes supported HTTP connections, attempts database
+cleanup once, and exits non-zero; requests are not guaranteed to complete past
+that bound.
+
+Application lifecycle, error, and HTTP terminal records are structured JSON
+written to standard output for the hosting platform to collect. The application
+does not persist logs, ship them remotely, or claim metrics, alerting, or
+distributed tracing. Allowlisted construction and logger redaction exclude
+credentials, tokens, bodies, query values, database URIs, raw idempotency keys,
+user profile fields, and production stack traces.
+
+### Remaining operational limits
+
+- Render still checks `/health`, which is liveness rather than readiness, so
+  the platform health check does not directly evaluate MongoDB readiness.
+- Signal handlers are registered after startup succeeds. A termination signal
+  during the database connection or retry window does not use the normal
+  graceful-shutdown orchestrator.
+- Synchronous standard-output logging can add latency at unusually high log
+  volume.
+- Pending OutboxEvents continue accumulating until a separately approved
+  delivery worker exists.
