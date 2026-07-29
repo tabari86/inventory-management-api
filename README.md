@@ -195,20 +195,86 @@ Bulk requests are limited to a maximum of 150 items per request.
 
 ## API Endpoints
 
+`/api/v1` is the canonical integration prefix. The same non-health operations
+remain temporarily reachable through `/api` without duplicated controllers or
+business logic. No legacy removal date is promised. Health and operational
+routes remain unversioned: `/`, `/health`, `/health/live`, `/health/ready`, and
+`/api/ready`.
+
+Every successful v1 response uses this transport envelope:
+
+```json
+{
+  "data": {},
+  "meta": {
+    "requestId": "request-id",
+    "correlationId": "correlation-id",
+    "schemaVersion": "1.0"
+  }
+}
+```
+
+Message-only successes use `"data": null`. Paginated collections add only
+`limit` and `nextCursor` to `meta`; they do not execute or expose a total count.
+Every v1 error has the following complete top-level contract:
+
+```json
+{
+  "type": "inventory-error",
+  "title": "Validation failed",
+  "status": 400,
+  "code": "VALIDATION_FAILED",
+  "detail": "Validation failed",
+  "requestId": "request-id",
+  "correlationId": "correlation-id",
+  "retryable": false,
+  "errors": []
+}
+```
+
+The IDs in response bodies match `X-Request-ID` and `X-Correlation-ID`. Known
+domain and idempotency codes remain machine-readable; validation details are
+limited to 50 `{field,message}` entries and never include rejected values.
+
+The Product, Warehouse, Stock, and StockMovement collection routes use opaque
+cursor pagination under both prefixes. The default limit is 50 and the maximum
+is 100. Sorting is limited to `createdAt` in `asc` or `desc` order (default
+`desc`), with `_id` in the same direction as a deterministic tie-breaker. A
+cursor is bound to its resource, normalized filters, sort, and order, so any
+change invalidates it. V1 returns `meta.nextCursor`; legacy lists retain
+`{message,data}` and expose a continuation only through `X-Next-Cursor`.
+
+| Collection | Allowed filters | Normalization |
+|---|---|---|
+| Products | `status`, `sku` | status enum; trimmed uppercase exact SKU of 1-64 characters; archived rows excluded |
+| Warehouses | `status`, `code` | status enum; trimmed uppercase exact code of 1-64 characters |
+| Stocks | `productId`, `warehouseId`, `status` | exact ObjectIds and status enum |
+| Stock movements | `stockId`, `productId`, `warehouseId`, `type`, `reference`, `from`, `to` | exact IDs/type/reference; inclusive ISO-8601 timestamps with timezone |
+
+Unknown parameters, repeated/object values, MongoDB operators, arbitrary sort,
+search, projection, population, and expansion are rejected. Public reads use
+explicit projections and bounded Product/Warehouse summaries. Canonical v1
+inventory mutations use operation-specific public DTO presenters after fresh or
+replayed execution; legacy bodies and stored idempotency results remain
+contract-neutral. Neither path exposes `__v`, private authentication data,
+AuditEvent, OutboxEvent, or IdempotencyRecord data. Cursor pagination is
+deterministic for a stable dataset but is not snapshot-isolated across
+concurrent writes.
+
 ### Authentication
 
 | Method | Endpoint            | Description                                         |
 |--------|---------------------|-----------------------------------------------------|
-| `POST` | `/api/auth/login`   | Login and receive access/refresh tokens             |
-| `POST` | `/api/auth/refresh` | Rotate refresh token and receive a new access token |
-| `POST` | `/api/auth/logout`  | Revoke refresh token                                |
-| `GET`  | `/api/auth/me`      | Get the current authenticated user                  |
+| `POST` | `/api/v1/auth/login`   | Login and receive access/refresh tokens             |
+| `POST` | `/api/v1/auth/refresh` | Rotate refresh token and receive a new access token |
+| `POST` | `/api/v1/auth/logout`  | Revoke refresh token                                |
+| `GET`  | `/api/v1/auth/me`      | Get the current authenticated user                  |
 
 ### Users
 
 | Method | Endpoint     | Role  | Description                     |
 |--------|--------------|-------|---------------------------------|
-| `POST` | `/api/users` | admin | Create a manager or viewer user |
+| `POST` | `/api/v1/users` | admin | Create a manager or viewer user |
 
 Public registration is intentionally not available. The first admin user is created through the seed script.
 
@@ -216,27 +282,27 @@ Public registration is intentionally not available. The first admin user is crea
 
 | Method   | Endpoint                       | Role                   | Description                       |
 |----------|--------------------------------|------------------------|-----------------------------------|
-| `GET`    | `/api/products`                | admin, manager, viewer | Retrieve all products             |
-| `GET`    | `/api/products/:id`            | admin, manager, viewer | Retrieve a single product         |
-| `POST`   | `/api/products`                | admin, manager         | Create a new product              |
-| `PATCH`  | `/api/products/:id`            | admin, manager         | Update product information        |
-| `PATCH`  | `/api/products/:id/deactivate` | admin, manager         | Deactivate a product              |
-| `DELETE` | `/api/products/:id`            | admin                  | Archive an inactive product (deprecated alias) |
-| `POST`   | `/api/products/bulk`           | admin, manager         | Create multiple products          |
-| `PATCH`  | `/api/products/bulk`           | admin, manager         | Update multiple products          |
-| `DELETE` | `/api/products/bulk`           | admin                  | Atomically archive inactive products (deprecated alias) |
+| `GET`    | `/api/v1/products`                | admin, manager, viewer | Retrieve all products             |
+| `GET`    | `/api/v1/products/:id`            | admin, manager, viewer | Retrieve a single product         |
+| `POST`   | `/api/v1/products`                | admin, manager         | Create a new product              |
+| `PATCH`  | `/api/v1/products/:id`            | admin, manager         | Update product information        |
+| `PATCH`  | `/api/v1/products/:id/deactivate` | admin, manager         | Deactivate a product              |
+| `DELETE` | `/api/v1/products/:id`            | admin                  | Archive an inactive product (deprecated alias) |
+| `POST`   | `/api/v1/products/bulk`           | admin, manager         | Create multiple products          |
+| `PATCH`  | `/api/v1/products/bulk`           | admin, manager         | Update multiple products          |
+| `DELETE` | `/api/v1/products/bulk`           | admin                  | Atomically archive inactive products (deprecated alias) |
 
 ### Warehouses
 
 | Method  | Endpoint                         | Role                   | Description                  |
 |---------|----------------------------------|------------------------|------------------------------|
-| `GET`   | `/api/warehouses`                | admin, manager, viewer | Retrieve all warehouses      |
-| `GET`   | `/api/warehouses/:id`            | admin, manager, viewer | Retrieve a single warehouse  |
-| `POST`  | `/api/warehouses`                | admin, manager         | Create a new warehouse       |
-| `PATCH` | `/api/warehouses/:id`            | admin, manager         | Update warehouse information |
-| `PATCH` | `/api/warehouses/:id/deactivate` | admin, manager         | Deactivate a warehouse       |
-| `POST`  | `/api/warehouses/bulk`           | admin, manager         | Create multiple warehouses   |
-| `PATCH` | `/api/warehouses/bulk`           | admin, manager         | Update multiple warehouses   |
+| `GET`   | `/api/v1/warehouses`                | admin, manager, viewer | Retrieve all warehouses      |
+| `GET`   | `/api/v1/warehouses/:id`            | admin, manager, viewer | Retrieve a single warehouse  |
+| `POST`  | `/api/v1/warehouses`                | admin, manager         | Create a new warehouse       |
+| `PATCH` | `/api/v1/warehouses/:id`            | admin, manager         | Update warehouse information |
+| `PATCH` | `/api/v1/warehouses/:id/deactivate` | admin, manager         | Deactivate a warehouse       |
+| `POST`  | `/api/v1/warehouses/bulk`           | admin, manager         | Create multiple warehouses   |
+| `PATCH` | `/api/v1/warehouses/bulk`           | admin, manager         | Update multiple warehouses   |
 
 Warehouse deletion is intentionally not implemented because warehouses can be connected to stock records and movement history.
 
@@ -244,10 +310,10 @@ Warehouse deletion is intentionally not implemented because warehouses can be co
 
 | Method | Endpoint           | Role                   | Description                                       |
 |--------|--------------------|------------------------|---------------------------------------------------|
-| `GET`  | `/api/stocks`      | admin, manager, viewer | Retrieve all stock records                        |
-| `GET`  | `/api/stocks/:id`  | admin, manager, viewer | Retrieve a single stock record                    |
-| `POST` | `/api/stocks`      | admin, manager         | Create a stock record for a product and warehouse |
-| `POST` | `/api/stocks/bulk` | admin, manager         | Create multiple stock records                     |
+| `GET`  | `/api/v1/stocks`      | admin, manager, viewer | Retrieve all stock records                        |
+| `GET`  | `/api/v1/stocks/:id`  | admin, manager, viewer | Retrieve a single stock record                    |
+| `POST` | `/api/v1/stocks`      | admin, manager         | Create a stock record for a product and warehouse |
+| `POST` | `/api/v1/stocks/bulk` | admin, manager         | Create multiple stock records                     |
 
 Stock quantity is not updated directly through the stock API. Quantity changes are handled through goods receipt and goods issue workflows.
 
@@ -255,22 +321,22 @@ Stock quantity is not updated directly through the stock API. Quantity changes a
 
 | Method | Endpoint                   | Role           | Description                               |
 |--------|----------------------------|----------------|-------------------------------------------|
-| `POST` | `/api/goods-receipts`      | admin, manager | Receive goods and increase stock quantity |
-| `POST` | `/api/goods-receipts/bulk` | admin, manager | Process multiple goods receipts           |
+| `POST` | `/api/v1/goods-receipts`      | admin, manager | Receive goods and increase stock quantity |
+| `POST` | `/api/v1/goods-receipts/bulk` | admin, manager | Process multiple goods receipts           |
 
 ### Goods Issues
 
 | Method | Endpoint | Role | Description |
 |--------|--------------------------|----------------|-----------------------------------------|
-| `POST` | `/api/goods-issues`      | admin, manager | Issue goods and decrease stock quantity |
-| `POST` | `/api/goods-issues/bulk` | admin, manager | Process multiple goods issues           |
+| `POST` | `/api/v1/goods-issues`      | admin, manager | Issue goods and decrease stock quantity |
+| `POST` | `/api/v1/goods-issues/bulk` | admin, manager | Process multiple goods issues           |
 
 ### Stock Movements
 
 | Method | Endpoint                   | Role                   | Description                      |
 |--------|----------------------------|------------------------|----------------------------------|
-| `GET`  | `/api/stock-movements`     | admin, manager, viewer | Retrieve stock movement history  |
-| `GET`  | `/api/stock-movements/:id` | admin, manager, viewer | Retrieve a single stock movement |
+| `GET`  | `/api/v1/stock-movements`     | admin, manager, viewer | Retrieve stock movement history  |
+| `GET`  | `/api/v1/stock-movements/:id` | admin, manager, viewer | Retrieve a single stock movement |
 
 Stock movements are generated by inventory workflows and exposed as read-only history. Manual stock movement creation is intentionally not exposed.
 
@@ -682,8 +748,10 @@ versioned API contract.
 Transactions provide atomic database persistence and driver retry safety.
 Inventory Core mutation routes additionally support optional, actor-scoped
 idempotency for retry-safe HTTP execution. AuditEvent and OutboxEvent already
-exist and are persisted inside the same mutation transaction. Outbox delivery,
-machine identity, and API versioning remain future work.
+exist and are persisted inside the same mutation transaction. Outbox delivery
+and machine identity remain future work. The canonical v1 HTTP contract is now
+implemented; mandatory optimistic preconditions remain a separate contract
+decision.
 
 ### Request context and optional idempotency
 
@@ -704,11 +772,12 @@ used in the unique actor/operation scope. The normalized business command is
 hashed with `canonical-json-v1`, after validation and normalization.
 
 The first successful keyed execution returns `Idempotency-Replayed: false`.
-The same actor, operation, key, and normalized command later receives the exact
-stored successful status/body with `Idempotency-Replayed: true` and fresh
-request/correlation response headers. A changed command returns 409 and current
-authentication/RBAC is evaluated before every replay. Only committed 2xx
-responses are stored. Failures do not reserve a key.
+The same actor, operation, key, and normalized command later receives the stored
+contract-neutral result with `Idempotency-Replayed: true`, fresh context
+headers, and the response body appropriate to the requested legacy or v1
+prefix. A changed command returns 409 and current authentication/RBAC is
+evaluated before every replay. Only committed 2xx results are stored. Failures
+do not reserve a key.
 
 Acquisition, the complete domain mutation, StockMovement writes, the response
 snapshot, and completion share one MongoDB transaction. MongoDB's unique scope
@@ -820,6 +889,29 @@ indexes, then deploy and smoke-test runtime code. Codex did not execute this
 migration against production. It creates no historical events: Audit and
 Outbox history begins at cutover. Pending OutboxEvents accumulate until a
 future delivery worker exists, and Audit/delivered-Outbox retention is deferred.
+
+WP7 read indexes use a separate dry-run-first, no-drop migration. Production
+startup uses `autoIndex: false`. Before any index creation, the migration
+performs two separate checks: it verifies the existing Product SKU, Warehouse
+code, Stock Product/Warehouse, and StockMovement aggregate-version prerequisite
+integrity indexes; then it classifies the WP7 bounded-read indexes. It also
+inspects Product, Warehouse, Stock, and StockMovement collection existence and
+`createdAt` validity:
+
+```bash
+npm run migrate:phase1-api-read-indexes
+npm run migrate:phase1-api-read-indexes -- --apply
+```
+
+Missing required collections and missing or incompatible prerequisite indexes
+are blocking in dry-run and apply. Apply creates no WP7 index while any
+preflight blocker exists. The migration accepts semantically equivalent
+alternate names, but never creates, drops, rebuilds, renames, or repairs a
+prerequisite index and never creates an empty missing collection. Operators
+must investigate blockers and use the owning historical migration or an
+explicitly approved remediation plan. With a clean preflight, apply creates
+only absent compatible WP7 read indexes and never modifies documents or
+introduces TTL indexes. No production migration or deployment was performed.
 
 These checks are operational deployment tasks and are not executed automatically by the application.
 
@@ -1192,7 +1284,7 @@ Possible future improvements:
 - future domain migrations beyond the lifecycle/version cutover
 - distributed rate limiting for multi-instance deployments
 - a separately approved Outbox delivery worker
-- machine identity and API versioning
+- machine identity and future contract revisions beyond v1
 
 ---
 

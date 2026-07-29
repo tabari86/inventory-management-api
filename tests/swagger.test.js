@@ -47,44 +47,44 @@ const documentedOperations = () =>
   );
 
 const protectedOperations = [
-  ["get", "/api/auth/me"],
-  ["post", "/api/users"],
-  ["get", "/api/products"],
-  ["post", "/api/products"],
-  ["get", "/api/products/{id}"],
-  ["patch", "/api/products/{id}"],
-  ["patch", "/api/products/{id}/deactivate"],
-  ["delete", "/api/products/{id}"],
-  ["post", "/api/products/bulk"],
-  ["patch", "/api/products/bulk"],
-  ["delete", "/api/products/bulk"],
-  ["get", "/api/warehouses"],
-  ["post", "/api/warehouses"],
-  ["get", "/api/warehouses/{id}"],
-  ["patch", "/api/warehouses/{id}"],
-  ["patch", "/api/warehouses/{id}/deactivate"],
-  ["post", "/api/warehouses/bulk"],
-  ["patch", "/api/warehouses/bulk"],
-  ["get", "/api/stocks"],
-  ["post", "/api/stocks"],
-  ["get", "/api/stocks/{id}"],
-  ["post", "/api/stocks/bulk"],
-  ["get", "/api/stock-movements"],
-  ["get", "/api/stock-movements/{id}"],
-  ["post", "/api/goods-receipts"],
-  ["post", "/api/goods-receipts/bulk"],
-  ["post", "/api/goods-issues"],
-  ["post", "/api/goods-issues/bulk"],
+  ["get", "/api/v1/auth/me"],
+  ["post", "/api/v1/users"],
+  ["get", "/api/v1/products"],
+  ["post", "/api/v1/products"],
+  ["get", "/api/v1/products/{id}"],
+  ["patch", "/api/v1/products/{id}"],
+  ["patch", "/api/v1/products/{id}/deactivate"],
+  ["delete", "/api/v1/products/{id}"],
+  ["post", "/api/v1/products/bulk"],
+  ["patch", "/api/v1/products/bulk"],
+  ["delete", "/api/v1/products/bulk"],
+  ["get", "/api/v1/warehouses"],
+  ["post", "/api/v1/warehouses"],
+  ["get", "/api/v1/warehouses/{id}"],
+  ["patch", "/api/v1/warehouses/{id}"],
+  ["patch", "/api/v1/warehouses/{id}/deactivate"],
+  ["post", "/api/v1/warehouses/bulk"],
+  ["patch", "/api/v1/warehouses/bulk"],
+  ["get", "/api/v1/stocks"],
+  ["post", "/api/v1/stocks"],
+  ["get", "/api/v1/stocks/{id}"],
+  ["post", "/api/v1/stocks/bulk"],
+  ["get", "/api/v1/stock-movements"],
+  ["get", "/api/v1/stock-movements/{id}"],
+  ["post", "/api/v1/goods-receipts"],
+  ["post", "/api/v1/goods-receipts/bulk"],
+  ["post", "/api/v1/goods-issues"],
+  ["post", "/api/v1/goods-issues/bulk"],
 ];
 
 const roleProtectedOperations = protectedOperations.filter(
-  ([, path]) => path !== "/api/auth/me"
+  ([, path]) => path !== "/api/v1/auth/me"
 );
 
 const operationsWithServerErrors = [
-  ["post", "/api/auth/login"],
-  ["post", "/api/auth/refresh"],
-  ["post", "/api/auth/logout"],
+  ["post", "/api/v1/auth/login"],
+  ["post", "/api/v1/auth/refresh"],
+  ["post", "/api/v1/auth/logout"],
   ...protectedOperations,
 ];
 
@@ -174,36 +174,47 @@ describe("Swagger/OpenAPI specification", () => {
   });
 
   it.each([
-    ["/api/products", "get"],
-    ["/api/warehouses", "get"],
-    ["/api/stocks", "get"],
-    ["/api/stock-movements", "get"],
-  ])("does not invent a context-validation 400 for %s %s", (path, method) => {
+    ["/api/v1/products", "get"],
+    ["/api/v1/warehouses", "get"],
+    ["/api/v1/stocks", "get"],
+    ["/api/v1/stock-movements", "get"],
+  ])("documents bounded-query validation for %s %s", (path, method) => {
     const specWithRefs = loadSwaggerSpec();
     const response = specWithRefs.paths[path][method].responses["400"];
 
-    expect(response).toBeUndefined();
+    expect(response["x-request-context-errors"]).toBeUndefined();
+    expect(response["x-error-codes"]).toEqual([
+      "VALIDATION_FAILED",
+      "INVALID_CURSOR",
+    ]);
+    expect(response.content["application/json"].schema.$ref).toBe(
+      "#/components/schemas/V1Error"
+    );
   });
 
   it("preserves existing validation and resource-ID 400 response contracts", () => {
     const specWithRefs = loadSwaggerSpec();
-    const productCreate = specWithRefs.paths["/api/products"].post.responses["400"];
+    const productCreate = specWithRefs.paths["/api/v1/products"].post.responses["400"];
     const productById =
-      specWithRefs.paths["/api/products/{id}"].get.responses["400"];
-    const userCreate = specWithRefs.paths["/api/users"].post.responses["400"];
+      specWithRefs.paths["/api/v1/products/{id}"].get.responses["400"];
+    const userCreate = specWithRefs.paths["/api/v1/users"].post.responses["400"];
 
     expect(productCreate.description).toBe("Validation failed");
-    expect(productCreate.content).toBeUndefined();
+    expect(productCreate.content["application/json"].schema.$ref).toBe(
+      "#/components/schemas/V1Error"
+    );
     expect(productCreate["x-request-context-errors"]).toBeUndefined();
     expect(productById.description).toBe("Invalid product ID");
-    expect(productById.content).toBeUndefined();
+    expect(productById.content["application/json"].schema.$ref).toBe(
+      "#/components/schemas/V1Error"
+    );
     expect(productById["x-request-context-errors"]).toBeUndefined();
     expect(userCreate).toMatchObject({
       description: "Validation failed",
       content: {
         "application/json": {
           schema: {
-            $ref: "#/components/schemas/ValidationErrorResponse",
+            $ref: "#/components/schemas/V1Error",
           },
         },
       },
@@ -240,11 +251,11 @@ describe("Swagger/OpenAPI specification", () => {
   });
 
   it.each([
-    ["/api/products/bulk", ["post", "patch", "delete"]],
-    ["/api/warehouses/bulk", ["post", "patch"]],
-    ["/api/stocks/bulk", ["post"]],
-    ["/api/goods-receipts/bulk", ["post"]],
-    ["/api/goods-issues/bulk", ["post"]],
+    ["/api/v1/products/bulk", ["post", "patch", "delete"]],
+    ["/api/v1/warehouses/bulk", ["post", "patch"]],
+    ["/api/v1/stocks/bulk", ["post"]],
+    ["/api/v1/goods-receipts/bulk", ["post"]],
+    ["/api/v1/goods-issues/bulk", ["post"]],
   ])("documents bulk operations for %s", (path, methods) => {
     expect(swaggerSpec.paths[path]).toBeDefined();
 
@@ -254,25 +265,31 @@ describe("Swagger/OpenAPI specification", () => {
   });
 
   it("does not expose forbidden registration or stock movement creation", () => {
-    expect(swaggerSpec.paths["/api/auth/register"]).toBeUndefined();
-    expect(swaggerSpec.paths["/api/stock-movements"].post).toBeUndefined();
+    expect(swaggerSpec.paths["/api/v1/auth/register"]).toBeUndefined();
+    expect(swaggerSpec.paths["/api/v1/stock-movements"].post).toBeUndefined();
     expect(
-      swaggerSpec.paths["/api/stock-movements/{id}"].post
+      swaggerSpec.paths["/api/v1/stock-movements/{id}"].post
     ).toBeUndefined();
   });
 
   it("does not introduce future API, event, worker, or webhook contracts", () => {
     const serializedSpec = JSON.stringify(swaggerSpec);
 
-    expect(Object.keys(swaggerSpec.paths)).not.toEqual(
+    expect(Object.keys(swaggerSpec.paths)).toEqual(
       expect.arrayContaining([expect.stringMatching(/^\/api\/v1(?:\/|$)/)])
     );
+    expect(
+      Object.keys(swaggerSpec.paths).filter(
+        (path) => /^\/api\/(?!v1(?:\/|$))/.test(path) && path !== "/api/ready"
+      )
+    ).toEqual([]);
     expect(serializedSpec).not.toMatch(
       /AuditEvent|OutboxEvent|AsyncLocalStorage|Redis|webhook|worker/i
     );
   });
 
   it.each([
+    ["/", false, "Describe the running API service"],
     ["/health/live", false, "Check process liveness"],
     ["/health", false, "Check process liveness (legacy alias)"],
     ["/health/ready", true, "Check application readiness"],
@@ -290,7 +307,9 @@ describe("Swagger/OpenAPI specification", () => {
     expect(
       operation.responses["200"].content["application/json"].schema.$ref
     ).toBe(
-      readiness
+      path === "/"
+        ? "#/components/schemas/RootResponse"
+        : readiness
         ? "#/components/schemas/ReadinessResponse"
         : "#/components/schemas/LivenessResponse"
     );
@@ -305,11 +324,11 @@ describe("Swagger/OpenAPI specification", () => {
   });
 
   it("keeps stock movement paths read-only", () => {
-    expect(Object.keys(swaggerSpec.paths["/api/stock-movements"])).toEqual([
+    expect(Object.keys(swaggerSpec.paths["/api/v1/stock-movements"])).toEqual([
       "get",
     ]);
     expect(
-      Object.keys(swaggerSpec.paths["/api/stock-movements/{id}"])
+      Object.keys(swaggerSpec.paths["/api/v1/stock-movements/{id}"])
     ).toEqual(["get"]);
   });
 
@@ -328,18 +347,17 @@ describe("Swagger/OpenAPI specification", () => {
   );
 
   it("documents the inactive-account response for the current-user endpoint", () => {
-    expect(swaggerSpec.paths["/api/auth/me"].get.responses["403"]).toEqual({
+    const specWithRefs = loadSwaggerSpec();
+    expect(specWithRefs.paths["/api/v1/auth/me"].get.responses["403"]).toMatchObject({
       description: "User account is inactive",
+      content: {
+        "application/json": {
+          schema: { $ref: "#/components/schemas/V1Error" },
+        },
+      },
       headers: {
-        "X-Request-ID": expect.objectContaining({
-          schema: expect.objectContaining({
-            type: "string",
-            maxLength: 128,
-          }),
-        }),
-        "X-Correlation-ID": expect.objectContaining({
-          schema: expect.objectContaining({ type: "string", maxLength: 128 }),
-        }),
+        "X-Request-ID": { $ref: "#/components/headers/XRequestId" },
+        "X-Correlation-ID": { $ref: "#/components/headers/XCorrelationId" },
       },
     });
   });
@@ -361,14 +379,14 @@ describe("Swagger/OpenAPI specification", () => {
   );
 
   it.each([
-    ["/api/products/bulk", "post", "array"],
-    ["/api/products/bulk", "patch", "array"],
-    ["/api/products/bulk", "delete", "object"],
-    ["/api/warehouses/bulk", "post", "array"],
-    ["/api/warehouses/bulk", "patch", "array"],
-    ["/api/stocks/bulk", "post", "array"],
-    ["/api/goods-receipts/bulk", "post", "array"],
-    ["/api/goods-issues/bulk", "post", "array"],
+    ["/api/v1/products/bulk", "post", "array"],
+    ["/api/v1/products/bulk", "patch", "array"],
+    ["/api/v1/products/bulk", "delete", "object"],
+    ["/api/v1/warehouses/bulk", "post", "array"],
+    ["/api/v1/warehouses/bulk", "patch", "array"],
+    ["/api/v1/stocks/bulk", "post", "array"],
+    ["/api/v1/goods-receipts/bulk", "post", "array"],
+    ["/api/v1/goods-issues/bulk", "post", "array"],
   ])("documents the %s %s body as %s", (path, method, type) => {
     const schema =
       swaggerSpec.paths[path][method].requestBody.content["application/json"]
@@ -379,7 +397,7 @@ describe("Swagger/OpenAPI specification", () => {
 
   it("documents product bulk deletion with an ids array", () => {
     const schema =
-      swaggerSpec.paths["/api/products/bulk"].delete.requestBody.content[
+      swaggerSpec.paths["/api/v1/products/bulk"].delete.requestBody.content[
         "application/json"
       ].schema;
 
@@ -389,7 +407,7 @@ describe("Swagger/OpenAPI specification", () => {
 
   it("limits user creation roles to manager and viewer", () => {
     const roleSchema =
-      swaggerSpec.paths["/api/users"].post.requestBody.content[
+      swaggerSpec.paths["/api/v1/users"].post.requestBody.content[
         "application/json"
       ].schema.properties.role;
 
@@ -398,11 +416,11 @@ describe("Swagger/OpenAPI specification", () => {
 
   it("documents precise single product and warehouse update schemas", () => {
     const productSchema =
-      swaggerSpec.paths["/api/products/{id}"].patch.requestBody.content[
+      swaggerSpec.paths["/api/v1/products/{id}"].patch.requestBody.content[
         "application/json"
       ].schema;
     const warehouseSchema =
-      swaggerSpec.paths["/api/warehouses/{id}"].patch.requestBody.content[
+      swaggerSpec.paths["/api/v1/warehouses/{id}"].patch.requestBody.content[
         "application/json"
       ].schema;
 
@@ -420,18 +438,18 @@ describe("Swagger/OpenAPI specification", () => {
   });
 
   it("marks legacy Product DELETE operations as deprecated archive aliases", () => {
-    expect(swaggerSpec.paths["/api/products/{id}"].delete.deprecated).toBe(true);
-    expect(swaggerSpec.paths["/api/products/bulk"].delete.deprecated).toBe(true);
+    expect(swaggerSpec.paths["/api/v1/products/{id}"].delete.deprecated).toBe(true);
+    expect(swaggerSpec.paths["/api/v1/products/bulk"].delete.deprecated).toBe(true);
     expect(
-      swaggerSpec.paths["/api/products/{id}"].delete.description
+      swaggerSpec.paths["/api/v1/products/{id}"].delete.description
     ).toContain("retains the Product");
   });
 
   it("documents Product create and update conflicts on the correct operations", () => {
     const createConflict =
-      swaggerSpec.paths["/api/products"].post.responses["409"].description;
+      swaggerSpec.paths["/api/v1/products"].post.responses["409"].description;
     const updateConflict =
-      swaggerSpec.paths["/api/products/{id}"].patch.responses["409"].description;
+      swaggerSpec.paths["/api/v1/products/{id}"].patch.responses["409"].description;
 
     expect(createConflict).toBe("Product with this SKU already exists");
     expect(createConflict).toContain("SKU");
@@ -473,14 +491,14 @@ describe("Swagger/OpenAPI specification", () => {
   });
 
   it.each([
-    ["/api/products/bulk", "post", "BulkProductsResponse"],
-    ["/api/products/bulk", "patch", "BulkProductsResponse"],
-    ["/api/products/bulk", "delete", "BulkProductsResponse"],
-    ["/api/warehouses/bulk", "post", "BulkWarehousesResponse"],
-    ["/api/warehouses/bulk", "patch", "BulkWarehousesResponse"],
-    ["/api/stocks/bulk", "post", "BulkStocksResponse"],
-    ["/api/goods-receipts/bulk", "post", "BulkGoodsReceiptResponse"],
-    ["/api/goods-issues/bulk", "post", "BulkGoodsIssueResponse"],
+    ["/api/v1/products/bulk", "post", "V1BulkProductsResponse"],
+    ["/api/v1/products/bulk", "patch", "V1BulkProductsResponse"],
+    ["/api/v1/products/bulk", "delete", "V1BulkProductsResponse"],
+    ["/api/v1/warehouses/bulk", "post", "V1BulkWarehousesResponse"],
+    ["/api/v1/warehouses/bulk", "patch", "V1BulkWarehousesResponse"],
+    ["/api/v1/stocks/bulk", "post", "V1BulkStocksResponse"],
+    ["/api/v1/goods-receipts/bulk", "post", "V1BulkInventoryMutationResponse"],
+    ["/api/v1/goods-issues/bulk", "post", "V1BulkInventoryMutationResponse"],
   ])("uses %s %s response schema %s", (path, method, schemaName) => {
     const specWithRefs = loadSwaggerSpec();
     const responseSchema =
@@ -492,15 +510,15 @@ describe("Swagger/OpenAPI specification", () => {
 
   it("documents validation limits and inactive receipt conflicts", () => {
     const productSchema =
-      swaggerSpec.paths["/api/products"].post.requestBody.content[
+      swaggerSpec.paths["/api/v1/products"].post.requestBody.content[
         "application/json"
       ].schema;
     const warehouseSchema =
-      swaggerSpec.paths["/api/warehouses"].post.requestBody.content[
+      swaggerSpec.paths["/api/v1/warehouses"].post.requestBody.content[
         "application/json"
       ].schema;
     const receiptSchema =
-      swaggerSpec.paths["/api/goods-receipts"].post.requestBody.content[
+      swaggerSpec.paths["/api/v1/goods-receipts"].post.requestBody.content[
         "application/json"
       ].schema;
 
@@ -512,11 +530,19 @@ describe("Swagger/OpenAPI specification", () => {
       maxLength: 64,
       pattern: "^[A-Z0-9_-]+$",
     });
+    expect(swaggerSpec.components.parameters.ProductSkuFilter.schema).toEqual({
+      type: "string",
+      minLength: 1,
+      maxLength: 64,
+    });
+    expect(
+      swaggerSpec.components.parameters.WarehouseCodeFilter.schema
+    ).toEqual({ type: "string", minLength: 1, maxLength: 64 });
     expect(receiptSchema.properties.reference.maxLength).toBe(100);
     expect(receiptSchema.properties.reason.maxLength).toBe(500);
-    expect(swaggerSpec.paths["/api/goods-receipts"].post.responses["409"]).toBeDefined();
+    expect(swaggerSpec.paths["/api/v1/goods-receipts"].post.responses["409"]).toBeDefined();
     expect(
-      swaggerSpec.paths["/api/goods-receipts/bulk"].post.responses["409"]
+      swaggerSpec.paths["/api/v1/goods-receipts/bulk"].post.responses["409"]
     ).toBeDefined();
   });
 
@@ -528,11 +554,13 @@ describe("Swagger/OpenAPI specification", () => {
         SuccessMessageResponse: expect.any(Object),
         LivenessResponse: expect.any(Object),
         ReadinessResponse: expect.any(Object),
-        BulkProductsResponse: expect.any(Object),
-        BulkWarehousesResponse: expect.any(Object),
-        BulkStocksResponse: expect.any(Object),
-        BulkGoodsReceiptResponse: expect.any(Object),
-        BulkGoodsIssueResponse: expect.any(Object),
+        V1Error: expect.any(Object),
+        V1Meta: expect.any(Object),
+        V1PaginationMeta: expect.any(Object),
+        V1BulkProductsResponse: expect.any(Object),
+        V1BulkWarehousesResponse: expect.any(Object),
+        V1BulkStocksResponse: expect.any(Object),
+        V1BulkInventoryMutationResponse: expect.any(Object),
       })
     );
   });
@@ -540,7 +568,8 @@ describe("Swagger/OpenAPI specification", () => {
   it.each(mutationOperationRegistry)(
     "documents idempotency on $method $path",
     ({ method, path, operationId }) => {
-      const operation = swaggerSpec.paths[path][method];
+      const canonicalPath = path.replace(/^\/api\//, "/api/v1/");
+      const operation = swaggerSpec.paths[canonicalPath][method];
       expect(operation.operationId).toBe(operationId);
       expect(operation.parameters).toContainEqual(
         expect.objectContaining({
@@ -563,7 +592,7 @@ describe("Swagger/OpenAPI specification", () => {
           required: false,
         })
       );
-      expect(operation.description).toContain("exact replay");
+      expect(operation.description).toContain("contract-neutral");
       expect(operation.description).toContain("return 409");
       expect(operation.responses["400"]).toBeDefined();
       expect(operation.responses["409"]).toBeDefined();
@@ -607,7 +636,10 @@ describe("Swagger/OpenAPI specification", () => {
 
   it("limits Idempotency-Key to exactly the 18 registered Inventory Core mutations", () => {
     const registeredMutations = new Set(
-      mutationOperationRegistry.map(({ method, path }) => `${method} ${path}`)
+      mutationOperationRegistry.map(
+        ({ method, path }) =>
+          `${method} ${path.replace(/^\/api\//, "/api/v1/")}`
+      )
     );
 
     expect(mutationOperationRegistry).toHaveLength(18);
@@ -631,6 +663,69 @@ describe("Swagger/OpenAPI specification", () => {
       expect(names).toContain("X-Correlation-ID");
       expect(names).not.toContain("Idempotency-Key");
     }
+  });
+
+  it("describes the canonical and temporary compatibility prefixes", () => {
+    expect(swaggerSpec["x-canonical-prefix"]).toBe("/api/v1");
+    expect(swaggerSpec["x-legacy-compatibility-prefix"]).toBe("/api");
+    expect(swaggerSpec.info.description).toContain("temporary /api");
+    expect(swaggerSpec.info.description).toContain("X-Next-Cursor");
+  });
+
+  it.each([
+    ["/api/v1/products", ["status", "sku"]],
+    ["/api/v1/warehouses", ["status", "code"]],
+    ["/api/v1/stocks", ["productId", "warehouseId", "status"]],
+    [
+      "/api/v1/stock-movements",
+      ["stockId", "productId", "warehouseId", "type", "reference", "from", "to"],
+    ],
+  ])("documents cursor and filter allowlists for %s", (path, filterNames) => {
+    const operation = swaggerSpec.paths[path].get;
+    const names = operation.parameters.map(parameterName);
+    expect(names).toEqual(
+      expect.arrayContaining(["limit", "cursor", "sort", "order", ...filterNames])
+    );
+    expect(operation.responses["400"]["x-error-codes"]).toEqual([
+      "VALIDATION_FAILED",
+      "INVALID_CURSOR",
+    ]);
+    expect(operation.description).toContain("not snapshot-isolated");
+  });
+
+  it("uses v1 envelopes for every canonical success and error response", () => {
+    const specWithRefs = loadSwaggerSpec();
+    const operationsWithRefs = Object.entries(specWithRefs.paths).flatMap(
+      ([path, pathItem]) =>
+        Object.entries(pathItem)
+          .filter(([method]) => httpMethods.has(method))
+          .map(([, operation]) => ({ path, operation }))
+    );
+    for (const { path, operation } of operationsWithRefs) {
+      if (!path.startsWith("/api/v1/")) continue;
+      for (const [status, response] of Object.entries(operation.responses)) {
+        const reference = response.content?.["application/json"]?.schema?.$ref;
+        if (status.startsWith("2")) {
+          expect(reference).toMatch(/^#\/components\/schemas\/V1/);
+        } else {
+          expect(reference).toBe("#/components/schemas/V1Error");
+        }
+      }
+    }
+    expect(swaggerSpec.components.schemas.V1Error.required).toEqual([
+      "type",
+      "title",
+      "status",
+      "code",
+      "detail",
+      "requestId",
+      "correlationId",
+      "retryable",
+      "errors",
+    ]);
+    expect(JSON.stringify(swaggerSpec)).not.toContain(
+      '"additionalProperties":true'
+    );
   });
 
   it("documents request/correlation headers on every documented response", () => {

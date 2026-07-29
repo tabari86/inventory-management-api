@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { indexesForCollection } = require("../config/apiReadIndexes");
 
 const productSnapshotSchema = new mongoose.Schema(
   {
@@ -75,5 +76,18 @@ const stockMovementSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+stockMovementSchema.index(
+  { stockId: 1, aggregateVersion: 1 },
+  {
+    name: "stock_aggregate_version_unique",
+    unique: true,
+    partialFilterExpression: { aggregateVersion: { $type: "number" } },
+  }
+);
+
+for (const { key, name } of indexesForCollection("stockmovements")) {
+  stockMovementSchema.index(key, { name });
+}
 
 module.exports = mongoose.model("StockMovement", stockMovementSchema);

@@ -31,7 +31,9 @@ const connectDatabase = async ({
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      await connect(process.env.MONGODB_URI);
+      await connect(process.env.MONGODB_URI, {
+        autoIndex: process.env.NODE_ENV !== "production",
+      });
 
       logger.log("database_connected", { attempt: attempt + 1 });
       return mongoose.connection;

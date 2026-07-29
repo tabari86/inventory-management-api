@@ -1,30 +1,14 @@
-const mongoose = require("mongoose");
-
-const StockMovement = require("../models/StockMovement");
+const readService = require("../services/readService");
+const errorCodes = require("../errors/errorCodes");
+const { sendError, sendPaginatedResult, sendSuccess } = require("../http/contract");
 
 const getStockMovements = async (req, res, next) => {
   try {
-    const stockMovements = await StockMovement.find()
-      .populate("productId", "sku name unit status archivedAt")
-      .populate("warehouseId", "code name status")
-      .populate({
-        path: "stockId",
-        populate: [
-          {
-            path: "productId",
-            select: "sku name unit status archivedAt",
-          },
-          {
-            path: "warehouseId",
-            select: "code name status",
-          },
-        ],
-      })
-      .sort({ createdAt: -1 });
-
-    return res.status(200).json({
+    const page = await readService.listStockMovements(req.query);
+    return sendPaginatedResult(req, res, {
+      statusCode: 200,
       message: "Stock movements retrieved successfully",
-      data: stockMovements,
+      ...page,
     });
   } catch (error) {
     error.message = "Could not retrieve stock movements";
@@ -34,38 +18,18 @@ const getStockMovements = async (req, res, next) => {
 
 const getStockMovementById = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid stock movement ID",
-      });
-    }
-
-    const stockMovement = await StockMovement.findById(id)
-      .populate("productId", "sku name unit status archivedAt")
-      .populate("warehouseId", "code name status")
-      .populate({
-        path: "stockId",
-        populate: [
-          {
-            path: "productId",
-            select: "sku name unit status archivedAt",
-          },
-          {
-            path: "warehouseId",
-            select: "code name status",
-          },
-        ],
-      });
+    const stockMovement = await readService.getStockMovementById(req.params.id);
 
     if (!stockMovement) {
-      return res.status(404).json({
-        message: "Stock movement not found",
+      return sendError(req, res, {
+        statusCode: 404,
+        code: errorCodes.RESOURCE_NOT_FOUND,
+        detail: "Stock movement not found",
       });
     }
 
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Stock movement retrieved successfully",
       data: stockMovement,
     });

@@ -10,6 +10,7 @@ const { hashCanonicalCommand } = require("../utils/canonicalJson");
 const withTransaction = require("../utils/transaction");
 const { createDomainEventCollector } = require("./domainEventCollector");
 const { persistAuditOutboxEvents } = require("./auditOutboxService");
+const { isV1Request, sendSuccess } = require("../http/contract");
 
 const MAX_ACQUISITION_ATTEMPTS = 3;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -305,7 +306,12 @@ const executeInventoryMutation = async ({
   throw inProgressError();
 };
 
-const sendInventoryMutation = async ({ req, res, ...options }) => {
+const sendInventoryMutation = async ({
+  req,
+  res,
+  presentV1Data,
+  ...options
+}) => {
   const outcome = await executeInventoryMutation({
     context: req.applicationContext,
     inventoryOperation: req.inventoryOperation,
@@ -316,7 +322,16 @@ const sendInventoryMutation = async ({ req, res, ...options }) => {
     res.setHeader("Idempotency-Replayed", String(outcome.replayed));
   }
 
-  return res.status(outcome.statusCode).json(outcome.body);
+  const data =
+    isV1Request(req) && typeof presentV1Data === "function"
+      ? presentV1Data(outcome.body.data)
+      : outcome.body.data;
+
+  return sendSuccess(req, res, {
+    statusCode: outcome.statusCode,
+    message: outcome.body.message,
+    data,
+  });
 };
 
 module.exports = {

@@ -10,6 +10,7 @@
     "migrate:phase1-lifecycle": "node scripts/migrations/phase1LifecycleVersion.js",
     "migrate:phase1-idempotency": "node scripts/migrations/phase1IdempotencyIndexes.js",
     "migrate:phase1-audit-outbox": "node scripts/migrations/phase1AuditOutboxIndexes.js",
+    "migrate:phase1-api-read-indexes": "node scripts/migrations/phase1ApiReadIndexes.js",
     "test": "jest --runInBand"
   },
   "keywords": [

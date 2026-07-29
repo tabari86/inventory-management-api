@@ -466,7 +466,11 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
 
   it("rolls back exact audit and outbox serialization/size failures without truncation", async () => {
     await expect(
-      executeDirectProductCreate({ productSku: "É".repeat(9_000) })
+      executeDirectProductCreate({
+        mutateDescriptor: (descriptor) => {
+          descriptor.after.sku = "É".repeat(9_000);
+        },
+      })
     ).rejects.toMatchObject({ code: "AUDIT_SNAPSHOT_TOO_LARGE" });
     await expect(
       executeDirectProductCreate({

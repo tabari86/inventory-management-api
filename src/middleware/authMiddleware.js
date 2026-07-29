@@ -1,14 +1,18 @@
 const jwt = require("jsonwebtoken");
 
 const User = require("../models/User");
+const errorCodes = require("../errors/errorCodes");
+const { sendError } = require("../http/contract");
 
 const authenticateUser = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        message: "Access token is required",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.AUTHENTICATION_REQUIRED,
+        detail: "Access token is required",
       });
     }
 
@@ -19,14 +23,19 @@ const authenticateUser = async (req, res, next) => {
     const user = await User.findById(decoded.userId);
 
     if (!user) {
-      return res.status(401).json({
-        message: "User not found",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.INVALID_ACCESS_TOKEN,
+        detail: "Invalid or expired access token",
+        legacyMessage: "User not found",
       });
     }
 
     if (user.status !== "active") {
-      return res.status(403).json({
-        message: "User account is inactive",
+      return sendError(req, res, {
+        statusCode: 403,
+        code: errorCodes.ACCESS_DENIED,
+        detail: "User account is inactive",
       });
     }
 
@@ -45,8 +54,10 @@ const authenticateUser = async (req, res, next) => {
 
     next();
   } catch (error) {
-    return res.status(401).json({
-      message: "Invalid or expired access token",
+    return sendError(req, res, {
+      statusCode: 401,
+      code: errorCodes.INVALID_ACCESS_TOKEN,
+      detail: "Invalid or expired access token",
     });
   }
 };

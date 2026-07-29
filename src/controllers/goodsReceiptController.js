@@ -1,6 +1,10 @@
 const inventoryService = require("../services/inventoryService");
 const { sendInventoryMutation } = require("../services/idempotencyExecutor");
 const { buildCanonicalCommand } = require("../utils/canonicalJson");
+const {
+  presentBulkInventoryMutationResult,
+  presentInventoryMutationResult,
+} = require("../http/resourcePresenters");
 
 const normalizeReceipt = ({ stockId, quantity, reference, reason }) => ({
   stockId: String(stockId).toLowerCase(),
@@ -37,6 +41,7 @@ const createGoodsReceipt = async (req, res, next) => {
         message: "Goods receipt completed successfully",
         data,
       }),
+      presentV1Data: presentInventoryMutationResult,
     });
   } catch (error) {
     error.clientMessage = "Could not complete goods receipt";
@@ -63,6 +68,7 @@ const createGoodsReceiptsBulk = async (req, res, next) => {
         message: "Goods receipts completed successfully",
         data,
       }),
+      presentV1Data: presentBulkInventoryMutationResult,
     });
   } catch (error) {
     error.clientMessage = "Could not complete goods receipts";

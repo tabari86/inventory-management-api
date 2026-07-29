@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { indexesForCollection } = require("../config/apiReadIndexes");
 
 const stockSchema = new mongoose.Schema(
   {
@@ -52,5 +53,9 @@ stockSchema.index(
   { productId: 1, warehouseId: 1 },
   { unique: true }
 );
+
+for (const { key, name } of indexesForCollection("stocks")) {
+  stockSchema.index(key, { name });
+}
 
 module.exports = mongoose.model("Stock", stockSchema);

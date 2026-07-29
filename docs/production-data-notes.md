@@ -172,6 +172,82 @@ until a future delivery worker is deliberately designed and deployed. Audit
 retention and delivered-Outbox retention remain deferred policy decisions; no
 TTL or cleanup task is included.
 
+## API read-index migration and v1 compatibility
+
+WP7 makes `/api/v1` canonical while retaining `/api` as a temporary runtime
+alias with no removal date. Legacy Product, Warehouse, Stock, and StockMovement
+lists are now bounded and callers must follow `X-Next-Cursor`. Canonical callers
+receive the cursor in `meta.nextCursor`. Cursor reads are deterministic for a
+stable dataset but are not snapshot-isolated across concurrent writes; only
+`createdAt` sorting is supported, and arbitrary search/projection is rejected.
+Canonical v1 inventory mutation data is also presented through explicit public
+DTO allowlists after fresh execution or replay, so Mongoose `__v` and other
+persistence-only fields are excluded without changing legacy response bodies or
+stored idempotency records.
+
+Production startup disables automatic Mongoose index construction. Required
+read indexes are owned by a dry-run-first migration:
+
+```bash
+npm run migrate:phase1-api-read-indexes
+npm run migrate:phase1-api-read-indexes -- --apply
+```
+
+The migration has two distinct index checks. Its prerequisite preflight verifies
+the schema-derived Product `{ sku: 1 }` unique index, Warehouse `{ code: 1 }`
+unique index, ordered Stock `{ productId: 1, warehouseId: 1 }` unique index, and
+ordered StockMovement `{ stockId: 1, aggregateVersion: 1 }` unique index with
+the exact numeric `aggregateVersion` partial filter. Index names are not the
+source of truth, so a differently named semantic equivalent is accepted.
+Missing, non-unique, wrongly ordered, or otherwise incompatible prerequisites
+are blocking and are never created, dropped, rebuilt, renamed, or repaired by
+this migration. Operators must investigate and run the owning historical
+migration or follow an explicitly approved remediation plan.
+
+The second check classifies the WP7 bounded-read indexes and reports missing or
+non-Date `createdAt` values. A missing required model-derived collection is also
+blocking: dry-run and apply fail non-zero, no collection is created merely to
+attach read indexes, and apply creates no WP7 index while any preflight blocker
+exists. Blocking rows are never rewritten or assigned fabricated timestamps.
+With a clean preflight, apply creates only absent compatible WP7 indexes, never
+drops/rebuilds an index, never changes documents, and introduces no TTL index.
+Reapplying is idempotent.
+
+Required index names and ordered keys are:
+
+- Products: `idx_products_non_archived_created_at_id`
+  `(archivedAt, createdAt, _id)` and
+  `idx_products_non_archived_status_created_at_id`
+  `(archivedAt, status, createdAt, _id)`.
+- Warehouses: `idx_warehouses_created_at_id` `(createdAt, _id)` and
+  `idx_warehouses_status_created_at_id` `(status, createdAt, _id)`.
+- Stocks: `idx_stocks_created_at_id`,
+  `idx_stocks_product_created_at_id`,
+  `idx_stocks_warehouse_created_at_id`, and
+  `idx_stocks_status_created_at_id`, each ending in `(createdAt, _id)`.
+- Stock movements: `idx_stock_movements_created_at_id` plus
+  `idx_stock_movements_{stock|product|warehouse|type|reference}_created_at_id`.
+
+The prerequisite unique SKU, warehouse-code, Product/Warehouse Stock
+relationship, and StockMovement aggregate-version integrity indexes remain
+owned by their schemas and historical migrations. The WP7 tool verifies but
+does not repair them. The minimal read set intentionally does not create every
+multi-filter permutation.
+
+Production rollout order, to be performed independently of this implementation:
+
+1. Independently review the runtime, index plan, migration, and tests.
+2. Commit the reviewed change.
+3. Run the production migration in dry-run mode and resolve any blocker through
+   a separately reviewed data/index operation.
+4. Run the explicit `--apply` command and verify every index.
+5. Deploy the application.
+6. Smoke-test health plus authenticated canonical and legacy reads/mutations,
+   including a cross-version idempotent replay.
+
+No production database, MongoDB Atlas database, migration, index creation,
+deployment, commit, or push was accessed or performed as part of WP7.
+
 ## Operational runtime deployment
 
 Work Package 6 changes process startup, health reporting, shutdown, request

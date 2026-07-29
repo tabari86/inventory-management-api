@@ -19,6 +19,11 @@ beforeAll(async () => {
   const mongoUri = mongoReplSet.getUri();
 
   await mongoose.connect(mongoUri);
+  // Wait for declared indexes before transactional tests begin. Otherwise
+  // background index creation can surface a transient transaction retry.
+  await Promise.all(
+    Object.values(mongoose.models).map((model) => model.init())
+  );
 });
 
 afterEach(async () => {

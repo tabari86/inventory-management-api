@@ -10,15 +10,14 @@ const { createHttpLogger } = require("./middleware/httpLogger");
 const { requestContext } = require("./middleware/requestContext");
 const { runtimeLifecycle } = require("./runtime/lifecycle");
 const { createHealthRouter } = require("./routes/healthRoutes");
-
-const productRoutes = require("./routes/productRoutes");
-const warehouseRoutes = require("./routes/warehouseRoutes");
-const stockRoutes = require("./routes/stockRoutes");
-const stockMovementRoutes = require("./routes/stockMovementRoutes");
-const goodsReceiptRoutes = require("./routes/goodsReceiptRoutes");
-const goodsIssueRoutes = require("./routes/goodsIssueRoutes");
-const authRoutes = require("./routes/authRoutes");
-const userRoutes = require("./routes/userRoutes");
+const apiRouter = require("./routes/apiRouter");
+const errorCodes = require("./errors/errorCodes");
+const {
+  API_CONTRACT_LEGACY,
+  API_CONTRACT_V1,
+  sendError,
+  setApiContractVersion,
+} = require("./http/contract");
 
 const createApp = ({
   lifecycle = runtimeLifecycle,
@@ -46,6 +45,8 @@ const createApp = ({
       },
     })
   );
+  // Version context must be known before JSON parsing can reject a request.
+  app.use("/api/v1", setApiContractVersion(API_CONTRACT_V1));
   app.use(express.json());
 
   app.get("/", (_req, res) => {
@@ -59,14 +60,16 @@ const createApp = ({
   // Swagger UI is intentionally public for portfolio and demo visibility.
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-  app.use("/api/auth", authRoutes);
-  app.use("/api/users", userRoutes);
-  app.use("/api/products", productRoutes);
-  app.use("/api/warehouses", warehouseRoutes);
-  app.use("/api/stocks", stockRoutes);
-  app.use("/api/stock-movements", stockMovementRoutes);
-  app.use("/api/goods-receipts", goodsReceiptRoutes);
-  app.use("/api/goods-issues", goodsIssueRoutes);
+  app.use("/api/v1", apiRouter);
+  app.use("/api/v1", (req, res) =>
+    sendError(req, res, {
+      statusCode: 404,
+      code: errorCodes.RESOURCE_NOT_FOUND,
+      detail: "API route not found",
+    })
+  );
+
+  app.use("/api", setApiContractVersion(API_CONTRACT_LEGACY), apiRouter);
 
   app.use(createErrorHandler(logger));
 

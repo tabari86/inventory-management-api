@@ -113,12 +113,13 @@ MongoDB
 
 Product/Warehouse mutations, goods receipt, goods issue, and Stock setup writes use application services that
 accept plain JavaScript input and do not depend on Express request or response
-objects. Their controllers translate HTTP input and output only. Existing Stock
-read operations remain in the Stock controller.
+objects. Their controllers translate HTTP input and output only. Product,
+Warehouse, Stock, and StockMovement reads use a focused read service that owns
+query validation, cursor predicates, projections, population, and limits.
 
 Expected business failures from these services use typed domain errors. The
-global error handler maps them to the existing status codes and message-only
-response bodies, so the public API contract remains unchanged.
+global error handler preserves their statuses/codes and presents either the v1
+machine-readable error envelope or the legacy message-shaped response.
 
 Product and Warehouse lifecycle services transactionally update the parent and
 propagate derived lifecycle state to related Stock guards:
@@ -168,6 +169,81 @@ last-write-wins. Mandatory preconditions are deferred to a versioned contract.
 
 Transaction callback state and movement calculations are attempt-local, so a
 driver callback retry does not accumulate versions or response arrays.
+
+## API contracts and bounded reads
+
+One shared API router is mounted first at `/api/v1` and then at the temporary
+`/api` compatibility prefix. Contract context is assigned before JSON parsing,
+so malformed JSON, authentication, RBAC, validation, rate limiting, route 404s,
+domain failures, and unexpected errors all use the correct presenter. Health,
+readiness, the root route, and Swagger UI are outside this versioned presenter.
+
+V1 successes are `{data,meta}`. Base metadata always contains the effective
+request/correlation IDs and `schemaVersion: "1.0"`; collection metadata also
+contains `limit` and nullable `nextCursor`. V1 errors always contain
+`type`, `title`, `status`, `code`, `detail`, both context IDs, `retryable`, and a
+bounded `errors` array. Legacy successes/errors retain their existing body
+shapes. Legacy lists are the deliberate exception to previously unbounded
+behavior: they return at most 50 records by default (100 maximum) and place a
+continuation token in `X-Next-Cursor`.
+
+Idempotency records continue storing the contract-neutral legacy-shaped public
+result. The presenter applies the requested envelope only after original
+execution or replay resolution. Because both aliases share stable business
+operation IDs and canonical command hashes, a mutation can execute through one
+prefix and replay through the other without another domain write, StockMovement,
+AuditEvent, or OutboxEvent.
+
+Collection queries accept only scalar allowlisted parameters. All four support
+`limit`, `cursor`, `sort=createdAt`, and `order=asc|desc`. Product filters are
+`status` and exact normalized `sku`; Warehouse filters are `status` and exact
+normalized `code`; Stock filters are `productId`, `warehouseId`, and `status`;
+StockMovement filters are `stockId`, `productId`, `warehouseId`, `type`, exact
+`reference`, and inclusive timezone-qualified `from`/`to` timestamps. Unknown
+keys, arrays, objects, MongoDB operators, arbitrary projection/population,
+search, and alternate sort fields fail validation before Mongoose receives a
+query.
+
+The cursor is canonical base64url JSON containing only version, resource, sort,
+order, last `createdAt`, last `_id`, and a SHA-256 fingerprint of the normalized
+resource/filter/sort contract. Descending reads use `createdAt < boundary OR
+(createdAt == boundary AND _id < boundaryId)`; ascending reads invert both
+comparisons. Each query fetches `limit + 1`, returns no more than `limit`, and
+creates a next cursor only when the extra row exists. No count query is issued.
+This is deterministic for a stable dataset, not snapshot isolation across
+concurrent writes.
+
+Public read DTOs use explicit `.select(...)`, `.lean()`, and bounded Product,
+Warehouse, and Stock populations. Canonical v1 mutation responses pass through
+explicit Product, Warehouse, Stock, StockMovement, bulk, lifecycle, and
+inventory-result presenters after fresh or replayed idempotent execution. These
+presenters allowlist documented fields, preserve domain `version` and
+`aggregateVersion`, and exclude Mongoose `__v`; legacy presentation and the
+contract-neutral stored idempotency body are unchanged. The supporting index
+families place equality fields first and `createdAt, _id` last:
+
+- Product: `(archivedAt, createdAt, _id)` and
+  `(archivedAt, status, createdAt, _id)`; the existing unique SKU index handles
+  exact SKU lookup.
+- Warehouse: `(createdAt, _id)` and `(status, createdAt, _id)`; the existing
+  unique code index handles exact code lookup.
+- Stock: `(createdAt, _id)` plus Product, Warehouse, and status variants; the
+  existing unique `(productId, warehouseId)` index handles the combined exact
+  relationship.
+- StockMovement: `(createdAt, _id)` plus stock, Product, Warehouse, type, and
+  reference equality variants. Multi-filter queries deliberately use this
+  minimal set with bounded results instead of every compound permutation.
+
+Production connection setup disables Mongoose automatic index creation. The
+explicit `phase1ApiReadIndexes` migration first requires all four model-derived
+collections and semantically verifies the pre-existing unique Product SKU,
+unique Warehouse code, unique ordered Stock Product/Warehouse, and unique
+partial StockMovement stock/aggregate-version indexes. It then classifies the
+WP7 read indexes. Missing collections, missing/incompatible prerequisites,
+incompatible read indexes, or invalid `createdAt` data block both modes before
+any index write. The migration never creates collections or repairs
+prerequisite indexes; a clean apply creates only absent compatible WP7 read
+indexes.
 
 ## Request Context
 
@@ -272,7 +348,8 @@ avoiding nested transactions.
 
 MongoDB's unique compound index prevents concurrent duplicate commits. A loser
 resolves the committed record in at most three bounded attempts. Matching
-request hashes replay the exact status/body without another domain write;
+request hashes replay the stored contract-neutral result without another domain
+write and the HTTP presenter applies the requested legacy or v1 contract;
 different hashes return 409. Authentication and RBAC always run before replay.
 Completed records expire seven days after completion through a single-field TTL
 index. TTL removal is asynchronous; until removal the stored record remains

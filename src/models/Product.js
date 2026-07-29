@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { indexesForCollection } = require("../config/apiReadIndexes");
 
 const productSchema = new mongoose.Schema(
   {
@@ -8,6 +9,7 @@ const productSchema = new mongoose.Schema(
       unique: true,
       trim: true,
       uppercase: true,
+      maxlength: 64,
     },
     name: {
       type: String,
@@ -61,5 +63,9 @@ const productSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+for (const { key, name } of indexesForCollection("products")) {
+  productSchema.index(key, { name });
+}
 
 module.exports = mongoose.model("Product", productSchema);

@@ -5,6 +5,8 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const RefreshToken = require("../models/RefreshToken");
 const { logger } = require("../config/logger");
+const errorCodes = require("../errors/errorCodes");
+const { sendError, sendSuccess } = require("../http/contract");
 
 const loginUser = async (req, res, next) => {
   try {
@@ -13,22 +15,28 @@ const loginUser = async (req, res, next) => {
     const user = await User.findOne({ email }).select("+password");
 
     if (!user) {
-      return res.status(401).json({
-        message: "Invalid email or password",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.AUTHENTICATION_FAILED,
+        detail: "Invalid email or password",
       });
     }
 
     if (user.status !== "active") {
-      return res.status(403).json({
-        message: "User account is inactive",
+      return sendError(req, res, {
+        statusCode: 403,
+        code: errorCodes.ACCESS_DENIED,
+        detail: "User account is inactive",
       });
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      return res.status(401).json({
-        message: "Invalid email or password",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.AUTHENTICATION_FAILED,
+        detail: "Invalid email or password",
       });
     }
 
@@ -77,7 +85,8 @@ const loginUser = async (req, res, next) => {
       });
     }
 
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Login successful",
       data: {
         accessToken,
@@ -111,34 +120,45 @@ const refreshAccessToken = async (req, res, next) => {
     });
 
     if (!storedRefreshToken) {
-      return res.status(401).json({
-        message: "Invalid refresh token",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.INVALID_REFRESH_TOKEN,
+        detail: "Invalid refresh token",
       });
     }
 
     if (storedRefreshToken.isRevoked) {
-      return res.status(401).json({
-        message: "Refresh token has been revoked",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.INVALID_REFRESH_TOKEN,
+        detail: "Refresh token has been revoked",
       });
     }
 
     if (storedRefreshToken.expiresAt < new Date()) {
-      return res.status(401).json({
-        message: "Refresh token has expired",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.INVALID_REFRESH_TOKEN,
+        detail: "Refresh token has expired",
       });
     }
 
     const user = await User.findById(storedRefreshToken.userId);
 
     if (!user) {
-      return res.status(401).json({
-        message: "User not found",
+      return sendError(req, res, {
+        statusCode: 401,
+        code: errorCodes.INVALID_REFRESH_TOKEN,
+        detail: "Invalid refresh token",
+        legacyMessage: "User not found",
       });
     }
 
     if (user.status !== "active") {
-      return res.status(403).json({
-        message: "User account is inactive",
+      return sendError(req, res, {
+        statusCode: 403,
+        code: errorCodes.ACCESS_DENIED,
+        detail: "User account is inactive",
       });
     }
 
@@ -172,7 +192,8 @@ const refreshAccessToken = async (req, res, next) => {
       expiresAt,
     });
 
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Token refreshed successfully",
       data: {
         accessToken,
@@ -203,7 +224,8 @@ const logoutUser = async (req, res, next) => {
       await storedRefreshToken.save();
     }
 
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Logout successful",
     });
   } catch (error) {
@@ -214,7 +236,8 @@ const logoutUser = async (req, res, next) => {
 
 const getCurrentUser = async (req, res, next) => {
   try {
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Current user retrieved successfully",
       data: req.user,
     });

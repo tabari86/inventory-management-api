@@ -1,8 +1,13 @@
-const mongoose = require("mongoose");
-const Product = require("../models/Product");
 const productService = require("../services/productService");
 const { sendInventoryMutation } = require("../services/idempotencyExecutor");
 const { buildCanonicalCommand } = require("../utils/canonicalJson");
+const readService = require("../services/readService");
+const errorCodes = require("../errors/errorCodes");
+const { sendError, sendPaginatedResult, sendSuccess } = require("../http/contract");
+const {
+  presentProduct,
+  presentProductBulkResult,
+} = require("../http/resourcePresenters");
 
 const normalizeId = (id) => String(id).toLowerCase();
 const commandFor = (req, normalizedBody, pathParameters = {}) =>
@@ -18,8 +23,10 @@ const createProduct = async (req, res, next) => {
     const { sku, name, description, unit, status } = req.body;
 
     if (!sku || !name) {
-      return res.status(400).json({
-        message: "SKU and product name are required",
+      return sendError(req, res, {
+        statusCode: 400,
+        code: errorCodes.VALIDATION_FAILED,
+        detail: "SKU and product name are required",
       });
     }
 
@@ -41,6 +48,7 @@ const createProduct = async (req, res, next) => {
         message: "Product created successfully",
         data: product,
       }),
+      presentV1Data: presentProduct,
     });
   } catch (error) {
     error.message = "Could not create product";
@@ -75,6 +83,7 @@ const createProductsBulk = async (req, res, next) => {
         message: "Products created successfully",
         data,
       }),
+      presentV1Data: presentProductBulkResult,
     });
   } catch (error) {
     error.clientMessage = "Could not create products";
@@ -125,6 +134,7 @@ const updateProductsBulk = async (req, res, next) => {
         message: "Products updated successfully",
         data,
       }),
+      presentV1Data: presentProductBulkResult,
     });
   } catch (error) {
     error.clientMessage = "Could not update products";
@@ -152,6 +162,7 @@ const deleteProductsBulk = async (req, res, next) => {
         message: "Products deleted successfully",
         data,
       }),
+      presentV1Data: presentProductBulkResult,
     });
   } catch (error) {
     error.clientMessage = "Could not delete products";
@@ -161,13 +172,11 @@ const deleteProductsBulk = async (req, res, next) => {
 
 const getProducts = async (req, res, next) => {
   try {
-    const products = await Product.find({ archivedAt: null }).sort({
-      createdAt: -1,
-    });
-
-    return res.status(200).json({
+    const page = await readService.listProducts(req.query);
+    return sendPaginatedResult(req, res, {
+      statusCode: 200,
       message: "Products retrieved successfully",
-      data: products,
+      ...page,
     });
   } catch (error) {
     error.message = "Could not retrieve products";
@@ -177,23 +186,18 @@ const getProducts = async (req, res, next) => {
 
 const getProductById = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid product ID",
-      });
-    }
-
-    const product = await Product.findOne({ _id: id, archivedAt: null });
+    const product = await readService.getProductById(req.params.id);
 
     if (!product) {
-      return res.status(404).json({
-        message: "Product not found",
+      return sendError(req, res, {
+        statusCode: 404,
+        code: errorCodes.RESOURCE_NOT_FOUND,
+        detail: "Product not found",
       });
     }
 
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Product retrieved successfully",
       data: product,
     });
@@ -242,6 +246,7 @@ const updateProduct = async (req, res, next) => {
         message: "Product updated successfully",
         data: updatedProduct,
       }),
+      presentV1Data: presentProduct,
     });
   } catch (error) {
     error.clientMessage = "Could not update product";
@@ -274,6 +279,7 @@ const deactivateProduct = async (req, res, next) => {
         message: "Product deactivated successfully",
         data: updatedProduct,
       }),
+      presentV1Data: presentProduct,
     });
   } catch (error) {
     error.clientMessage = "Could not deactivate product";

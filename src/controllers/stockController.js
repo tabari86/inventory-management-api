@@ -1,9 +1,13 @@
-const mongoose = require("mongoose");
-
-const Stock = require("../models/Stock");
 const { sendInventoryMutation } = require("../services/idempotencyExecutor");
 const stockService = require("../services/stockService");
 const { buildCanonicalCommand } = require("../utils/canonicalJson");
+const readService = require("../services/readService");
+const errorCodes = require("../errors/errorCodes");
+const { sendError, sendPaginatedResult, sendSuccess } = require("../http/contract");
+const {
+  presentStock,
+  presentStockBulkResult,
+} = require("../http/resourcePresenters");
 
 const normalizeId = (id) => String(id).toLowerCase();
 const commandFor = (req, normalizedBody) =>
@@ -38,6 +42,7 @@ const createStock = async (req, res, next) => {
         message: "Stock record created successfully",
         data: stock,
       }),
+      presentV1Data: presentStock,
     });
   } catch (error) {
     error.clientMessage = "Could not create stock record";
@@ -67,6 +72,7 @@ const createStocksBulk = async (req, res, next) => {
         message: "Stock records created successfully",
         data,
       }),
+      presentV1Data: presentStockBulkResult,
     });
   } catch (error) {
     error.clientMessage = "Could not create stock records";
@@ -76,14 +82,11 @@ const createStocksBulk = async (req, res, next) => {
 
 const getStocks = async (req, res, next) => {
   try {
-    const stocks = await Stock.find()
-      .populate("productId", "sku name unit status archivedAt")
-      .populate("warehouseId", "code name status")
-      .sort({ createdAt: -1 });
-
-    return res.status(200).json({
+    const page = await readService.listStocks(req.query);
+    return sendPaginatedResult(req, res, {
+      statusCode: 200,
       message: "Stock records retrieved successfully",
-      data: stocks,
+      ...page,
     });
   } catch (error) {
     error.message = "Could not retrieve stock records";
@@ -93,25 +96,18 @@ const getStocks = async (req, res, next) => {
 
 const getStockById = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid stock ID",
-      });
-    }
-
-    const stock = await Stock.findById(id)
-      .populate("productId", "sku name unit status archivedAt")
-      .populate("warehouseId", "code name status");
+    const stock = await readService.getStockById(req.params.id);
 
     if (!stock) {
-      return res.status(404).json({
-        message: "Stock record not found",
+      return sendError(req, res, {
+        statusCode: 404,
+        code: errorCodes.RESOURCE_NOT_FOUND,
+        detail: "Stock record not found",
       });
     }
 
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Stock record retrieved successfully",
       data: stock,
     });

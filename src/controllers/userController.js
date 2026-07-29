@@ -1,6 +1,8 @@
 const bcrypt = require("bcrypt");
 
 const User = require("../models/User");
+const errorCodes = require("../errors/errorCodes");
+const { sendError, sendSuccess } = require("../http/contract");
 
 const createUser = async (req, res, next) => {
   try {
@@ -9,8 +11,10 @@ const createUser = async (req, res, next) => {
     const existingUser = await User.findOne({ email });
 
     if (existingUser) {
-      return res.status(409).json({
-        message: "A user with this email already exists",
+      return sendError(req, res, {
+        statusCode: 409,
+        code: errorCodes.DUPLICATE_RESOURCE,
+        detail: "A user with this email already exists",
       });
     }
 
@@ -23,7 +27,8 @@ const createUser = async (req, res, next) => {
       status: "active",
     });
 
-    return res.status(201).json({
+    return sendSuccess(req, res, {
+      statusCode: 201,
       message: "User created successfully",
       data: {
         id: user._id,
@@ -35,8 +40,10 @@ const createUser = async (req, res, next) => {
     });
   } catch (error) {
     if (error.code === 11000) {
-      return res.status(409).json({
-        message: "A user with this email already exists",
+      return sendError(req, res, {
+        statusCode: 409,
+        code: errorCodes.DUPLICATE_RESOURCE,
+        detail: "A user with this email already exists",
       });
     }
 

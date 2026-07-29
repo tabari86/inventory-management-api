@@ -1,8 +1,13 @@
-const Warehouse = require("../models/Warehouse");
-const mongoose = require("mongoose");
 const { sendInventoryMutation } = require("../services/idempotencyExecutor");
 const warehouseService = require("../services/warehouseService");
 const { buildCanonicalCommand } = require("../utils/canonicalJson");
+const readService = require("../services/readService");
+const errorCodes = require("../errors/errorCodes");
+const { sendError, sendPaginatedResult, sendSuccess } = require("../http/contract");
+const {
+  presentWarehouse,
+  presentWarehouseBulkResult,
+} = require("../http/resourcePresenters");
 
 const normalizeId = (id) => String(id).toLowerCase();
 const commandFor = (req, normalizedBody, pathParameters = {}) =>
@@ -18,8 +23,10 @@ const createWarehouse = async (req, res, next) => {
     const { code, name, description, status } = req.body;
 
     if (!code || !name) {
-      return res.status(400).json({
-        message: "Warehouse code and name are required",
+      return sendError(req, res, {
+        statusCode: 400,
+        code: errorCodes.VALIDATION_FAILED,
+        detail: "Warehouse code and name are required",
       });
     }
 
@@ -46,6 +53,7 @@ const createWarehouse = async (req, res, next) => {
         message: "Warehouse created successfully",
         data: warehouse,
       }),
+      presentV1Data: presentWarehouse,
     });
   } catch (error) {
     error.message = "Could not create warehouse";
@@ -79,6 +87,7 @@ const createWarehousesBulk = async (req, res, next) => {
         message: "Warehouses created successfully",
         data,
       }),
+      presentV1Data: presentWarehouseBulkResult,
     });
   } catch (error) {
     error.clientMessage = "Could not create warehouses";
@@ -119,6 +128,7 @@ const updateWarehousesBulk = async (req, res, next) => {
         message: "Warehouses updated successfully",
         data,
       }),
+      presentV1Data: presentWarehouseBulkResult,
     });
   } catch (error) {
     error.clientMessage = "Could not update warehouses";
@@ -128,11 +138,11 @@ const updateWarehousesBulk = async (req, res, next) => {
 
 const getWarehouses = async (req, res, next) => {
   try {
-    const warehouses = await Warehouse.find().sort({ createdAt: -1 });
-
-    return res.status(200).json({
+    const page = await readService.listWarehouses(req.query);
+    return sendPaginatedResult(req, res, {
+      statusCode: 200,
       message: "Warehouses retrieved successfully",
-      data: warehouses,
+      ...page,
     });
   } catch (error) {
     error.message = "Could not retrieve warehouses";
@@ -142,23 +152,18 @@ const getWarehouses = async (req, res, next) => {
 
 const getWarehouseById = async (req, res, next) => {
   try {
-    const { id } = req.params;
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid warehouse ID",
-      });
-    }
-
-    const warehouse = await Warehouse.findById(id);
+    const warehouse = await readService.getWarehouseById(req.params.id);
 
     if (!warehouse) {
-      return res.status(404).json({
-        message: "Warehouse not found",
+      return sendError(req, res, {
+        statusCode: 404,
+        code: errorCodes.RESOURCE_NOT_FOUND,
+        detail: "Warehouse not found",
       });
     }
 
-    return res.status(200).json({
+    return sendSuccess(req, res, {
+      statusCode: 200,
       message: "Warehouse retrieved successfully",
       data: warehouse,
     });
@@ -203,6 +208,7 @@ const updateWarehouse = async (req, res, next) => {
         message: "Warehouse updated successfully",
         data: updatedWarehouse,
       }),
+      presentV1Data: presentWarehouse,
     });
   } catch (error) {
     error.clientMessage = "Could not update warehouse";
@@ -235,6 +241,7 @@ const deactivateWarehouse = async (req, res, next) => {
         message: "Warehouse deactivated successfully",
         data: updatedWarehouse,
       }),
+      presentV1Data: presentWarehouse,
     });
   } catch (error) {
     error.clientMessage = "Could not deactivate warehouse";
