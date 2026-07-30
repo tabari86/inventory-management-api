@@ -15,10 +15,13 @@ available.
 
 Refresh tokens are random 64-byte values returned once to the client. Only a
 SHA-256 hash is stored, with a seven-day expiry. Refresh rotates and revokes the
-used token; logout revokes the presented token. A successful login normally
-revokes older active refresh tokens for that user. MongoDB TTL cleanup is
-asynchronous, and server-side revocation remains authoritative while a row
-exists.
+used token; logout revokes the presented token. Each refresh token is
+single-use: one MongoDB transaction atomically consumes the old token and
+creates one hashed successor with the same session, so concurrent reuse is
+rejected. A successful login normally revokes older active refresh tokens for
+that user. MongoDB TTL cleanup is asynchronous, and server-side revocation
+remains authoritative while a row exists. Token-family revocation and refresh-
+token theft detection remain outside Phase 1.
 
 ## Request and mutation controls
 
@@ -73,10 +76,21 @@ The repository policy is:
 
 `npm run verify:security` scans the current repository file set for tracked
 environment/private-key files, private-key headers, high-confidence embedded
-MongoDB credentials, JWT-like literals, and non-placeholder example secrets. It
-reports only a path, rule identifier, and redacted category. This deterministic
-check intentionally avoids Git history and is not a substitute for a dedicated
-secret-scanning service.
+MongoDB credentials, JWT-like literals, non-placeholder example secrets, and
+high-confidence hardcoded string literals assigned through declarations, bare
+assignments, dot or nested-dot members, static quoted bracket members,
+instance or static public class fields, and quoted or unquoted object-literal
+properties. Direct assignment tokens may be separated by whitespace, block
+comments, or newline-terminated line comments, including comments after `=`;
+commented-out assignments remain scanned because committed comments can also
+contain secrets. No credential value is globally allowlisted. A controlled
+fixture exception requires an exact normalized file path, normalized terminal
+identifier, expected value SHA-256, and explicitly approved test-fixture or
+documentation-example context with a recorded reason; tests and documentation
+are not blanket-exempt. Findings report only a path, rule identifier, and
+redacted category. This deterministic regex-based current-working-tree check
+intentionally avoids Git history, is not a complete JavaScript parser, and is
+not a substitute for a dedicated secret-scanning service.
 
 ## Dependency policy and CI gates
 

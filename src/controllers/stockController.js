@@ -1,4 +1,4 @@
-const { sendInventoryMutation } = require("../services/idempotencyExecutor");
+const sendInventoryMutation = require("../http/sendInventoryMutation");
 const stockService = require("../services/stockService");
 const { buildCanonicalCommand } = require("../utils/canonicalJson");
 const readService = require("../services/readService");

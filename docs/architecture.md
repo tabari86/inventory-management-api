@@ -116,6 +116,14 @@ objects. Their controllers translate HTTP input and output only. Product,
 Warehouse, Stock, and StockMovement reads use a focused read service that owns
 query validation, cursor predicates, projections, population, and limits.
 
+Authentication login, refresh rotation, and logout logic lives in
+`src/services/authService.js`; administrative user creation lives in
+`src/services/userService.js`. These services accept plain values and own their
+persistence and domain-error behavior, while their controllers perform HTTP
+input extraction and response presentation only. Inventory mutation execution
+remains HTTP-independent in `src/services/idempotencyExecutor.js`; the Express
+presentation adapter is `src/http/sendInventoryMutation.js`.
+
 Expected business failures from these services use typed domain errors. The
 global error handler preserves their statuses/codes and presents either the v1
 machine-readable error envelope or the legacy message-shaped response.

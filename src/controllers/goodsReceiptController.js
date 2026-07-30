@@ -1,5 +1,5 @@
 const inventoryService = require("../services/inventoryService");
-const { sendInventoryMutation } = require("../services/idempotencyExecutor");
+const sendInventoryMutation = require("../http/sendInventoryMutation");
 const { buildCanonicalCommand } = require("../utils/canonicalJson");
 const {
   presentBulkInventoryMutationResult,

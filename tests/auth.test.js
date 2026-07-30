@@ -1,4 +1,5 @@
 const request = require("supertest");
+const crypto = require("crypto");
 
 const app = require("../src/app");
 const { logger } = require("../src/config/logger");
@@ -120,7 +121,7 @@ describe("Auth API", () => {
       .send({ refreshToken: oldRefreshToken });
 
     expect(reusedTokenResponse.statusCode).toBe(401);
-    expect(reusedTokenResponse.body.message).toBe("Refresh token has been revoked");
+    expect(reusedTokenResponse.body.message).toBe("Invalid refresh token");
   });
 
   it("revokes a refresh token on logout", async () => {
@@ -148,7 +149,7 @@ describe("Auth API", () => {
       .send({ refreshToken });
 
     expect(refreshResponse.statusCode).toBe(401);
-    expect(refreshResponse.body.message).toBe("Refresh token has been revoked");
+    expect(refreshResponse.body.message).toBe("Invalid refresh token");
   });
 
   it("revokes older sessions when the same user logs in again", async () => {
@@ -175,8 +176,159 @@ describe("Auth API", () => {
     expect(firstLogin.statusCode).toBe(200);
     expect(secondLogin.statusCode).toBe(200);
     expect(oldTokenResponse.statusCode).toBe(401);
-    expect(oldTokenResponse.body.message).toBe("Refresh token has been revoked");
+    expect(oldTokenResponse.body.message).toBe("Invalid refresh token");
     expect(latestTokenResponse.statusCode).toBe(200);
+  });
+
+  it("uses one atomic refresh-token consumer across canonical and legacy routes", async () => {
+    const credentials = {
+      email: "refresh.contracts@example.com",
+      password: "Password123",
+    };
+    await createTestUser(credentials);
+    const loginResponse = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+    const originalToken = loginResponse.body.data.refreshToken;
+
+    const legacySuccess = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refreshToken: originalToken });
+    const canonicalReuse = await request(app)
+      .post("/api/v1/auth/refresh")
+      .send({ refreshToken: originalToken });
+    const canonicalSuccess = await request(app)
+      .post("/api/v1/auth/refresh")
+      .send({ refreshToken: legacySuccess.body.data.refreshToken });
+    const legacyReuse = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refreshToken: legacySuccess.body.data.refreshToken });
+
+    expect(legacySuccess.statusCode).toBe(200);
+    expect(canonicalReuse.statusCode).toBe(401);
+    expect(canonicalReuse.body).toMatchObject({
+      code: "INVALID_REFRESH_TOKEN",
+      retryable: false,
+    });
+    expect(canonicalSuccess.statusCode).toBe(200);
+    expect(canonicalSuccess.body.data).toHaveProperty("accessToken");
+    expect(legacyReuse.statusCode).toBe(401);
+    expect(legacyReuse.body.message).toBe("Invalid refresh token");
+    expect(
+      await RefreshToken.countDocuments({ isRevoked: false })
+    ).toBe(1);
+  });
+
+  it("allows exactly one of 20 concurrent refreshes for five rounds", async () => {
+    for (let round = 0; round < 5; round += 1) {
+      const credentials = {
+        email: `refresh.concurrent.${round}@example.com`,
+        password: "Password123",
+      };
+      const user = await createTestUser(credentials);
+      const loginResponse = await request(app)
+        .post("/api/auth/login")
+        .send(credentials);
+      const originalToken = loginResponse.body.data.refreshToken;
+      const originalTokenHash = crypto
+        .createHash("sha256")
+        .update(originalToken)
+        .digest("hex");
+
+      const responses = await Promise.all(
+        Array.from({ length: 20 }, () =>
+          request(app)
+            .post("/api/v1/auth/refresh")
+            .send({ refreshToken: originalToken })
+        )
+      );
+      const successes = responses.filter(
+        (response) => response.statusCode === 200
+      );
+      const failures = responses.filter(
+        (response) => response.statusCode !== 200
+      );
+
+      expect(successes).toHaveLength(1);
+      expect(failures).toHaveLength(19);
+      for (const response of failures) {
+        expect(response.statusCode).toBe(401);
+        expect(response.body).toMatchObject({
+          code: "INVALID_REFRESH_TOKEN",
+          retryable: false,
+        });
+      }
+
+      const originalRecord = await RefreshToken.findOne({
+        tokenHash: originalTokenHash,
+      });
+      expect(originalRecord.isRevoked).toBe(true);
+      expect(
+        await RefreshToken.countDocuments({
+          userId: user._id,
+          isRevoked: false,
+        })
+      ).toBe(1);
+      expect(
+        await RefreshToken.countDocuments({ userId: user._id })
+      ).toBe(2);
+    }
+  });
+
+  it("rolls back old-token consumption when successor creation fails", async () => {
+    const credentials = {
+      email: "refresh.rollback@example.com",
+      password: "Password123",
+    };
+    const user = await createTestUser(credentials);
+    const loginResponse = await request(app)
+      .post("/api/auth/login")
+      .send(credentials);
+    const originalToken = loginResponse.body.data.refreshToken;
+    const originalTokenHash = crypto
+      .createHash("sha256")
+      .update(originalToken)
+      .digest("hex");
+    const createSpy = jest
+      .spyOn(RefreshToken, "create")
+      .mockRejectedValueOnce(new Error("controlled successor creation failure"));
+
+    const failedResponse = await request(app)
+      .post("/api/v1/auth/refresh")
+      .send({ refreshToken: originalToken });
+    createSpy.mockRestore();
+
+    expect(failedResponse.statusCode).toBe(500);
+    expect(failedResponse.body).toMatchObject({
+      code: "INTERNAL_ERROR",
+      retryable: false,
+    });
+    expect(JSON.stringify(failedResponse.body)).not.toContain(
+      "controlled successor creation failure"
+    );
+
+    const rolledBackOriginal = await RefreshToken.findOne({
+      tokenHash: originalTokenHash,
+    });
+    expect(rolledBackOriginal.isRevoked).toBe(false);
+    expect(
+      await RefreshToken.countDocuments({ userId: user._id })
+    ).toBe(1);
+
+    const retryResponse = await request(app)
+      .post("/api/v1/auth/refresh")
+      .send({ refreshToken: originalToken });
+
+    expect(retryResponse.statusCode).toBe(200);
+    expect(
+      await RefreshToken.countDocuments({
+        userId: user._id,
+        isRevoked: false,
+      })
+    ).toBe(1);
+    expect(
+      await RefreshToken.countDocuments({ userId: user._id })
+    ).toBe(2);
   });
 
   it("does not revoke an existing session when new refresh token creation fails", async () => {
