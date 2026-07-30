@@ -59,7 +59,7 @@ describe("Database startup connection", () => {
   });
 
   it("disables automatic index creation in production without logging credentials", async () => {
-    const privateUri = "mongodb://private-user:private-password@private-host/db";
+    const privateUri = "mongodb://private-user:private-password@private-host.invalid/db";
     process.env.MONGODB_URI = privateUri;
     process.env.NODE_ENV = "production";
     process.env.DB_CONNECT_RETRIES = "0";
@@ -115,7 +115,7 @@ describe("Database startup connection", () => {
   it("rejects with a sanitized error after retries are exhausted", async () => {
     process.env.DB_CONNECT_RETRIES = "1";
     process.env.DB_CONNECT_RETRY_DELAY_MS = "0";
-    const privateMarker = "mongodb://user:password@private-host/database";
+    const privateMarker = "mongodb://user:password@private-host.invalid/database";
     mongoose.connect.mockRejectedValue(new Error(privateMarker));
 
     await expect(

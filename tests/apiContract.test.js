@@ -345,7 +345,7 @@ describe("WP7 API routing and HTTP contracts", () => {
       .send({ sku: "DUPLICATE-WP7", name: "Second" });
     expectV1Error(duplicate, 409, "DUPLICATE_RESOURCE");
 
-    const privateMarker = "mongodb://user:password@private/database";
+    const privateMarker = "mongodb://user:password@private.invalid/database";
     const req = {
       apiContractVersion: "v1",
       applicationContext: {

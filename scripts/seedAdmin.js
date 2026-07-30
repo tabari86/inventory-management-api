@@ -1,26 +1,26 @@
-require("dotenv").config();
-
 const bcrypt = require("bcrypt");
 const mongoose = require("mongoose");
 
 const User = require("../src/models/User");
+const {
+  EnvironmentValidationError,
+  parseSeedAdminEnvironment,
+} = require("../src/config/environment");
 
-const seedAdmin = async () => {
-  const { ADMIN_NAME, ADMIN_EMAIL, ADMIN_PASSWORD, MONGODB_URI } = process.env;
+const seedAdmin = async ({
+  environment = process.env,
+  connect = mongoose.connect.bind(mongoose),
+  UserModel = User,
+  hashPassword = bcrypt.hash,
+  writeMessage = console.log,
+} = {}) => {
+  const configuration = parseSeedAdminEnvironment(environment);
 
-  if (!ADMIN_NAME || !ADMIN_EMAIL || !ADMIN_PASSWORD) {
-    throw new Error(
-      "ADMIN_NAME, ADMIN_EMAIL and ADMIN_PASSWORD must all be provided"
-    );
-  }
+  await connect(configuration.mongodbUri);
 
-  if (!MONGODB_URI) {
-    throw new Error("MONGODB_URI must be provided");
-  }
-
-  await mongoose.connect(MONGODB_URI);
-
-  const userWithAdminEmail = await User.findOne({ email: ADMIN_EMAIL });
+  const userWithAdminEmail = await UserModel.findOne({
+    email: configuration.adminEmail,
+  });
 
   if (userWithAdminEmail && userWithAdminEmail.role !== "admin") {
     throw new Error(
@@ -28,33 +28,46 @@ const seedAdmin = async () => {
     );
   }
 
-  const existingAdmin = await User.findOne({ role: "admin" });
+  const existingAdmin = await UserModel.findOne({ role: "admin" });
 
   if (existingAdmin) {
-    console.log("An admin user already exists; no new admin was created");
+    writeMessage("An admin user already exists; no new admin was created");
     return;
   }
 
-  const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, 10);
+  const hashedPassword = await hashPassword(configuration.adminPassword, 10);
 
-  await User.create({
-    name: ADMIN_NAME,
-    email: ADMIN_EMAIL,
+  await UserModel.create({
+    name: configuration.adminName,
+    email: configuration.adminEmail,
     password: hashedPassword,
     role: "admin",
     status: "active",
   });
 
-  console.log("Admin user created successfully");
+  writeMessage("Admin user created successfully");
 };
 
-seedAdmin()
-  .catch((error) => {
-    console.error(`Could not seed admin: ${error.message}`);
+const main = async () => {
+  require("dotenv").config({ quiet: true });
+  try {
+    await seedAdmin();
+  } catch (error) {
+    const errorCode =
+      error instanceof EnvironmentValidationError
+        ? "SEED_CONFIGURATION_INVALID"
+        : "SEED_ADMIN_FAILED";
+    console.error(`Could not seed admin (${errorCode})`);
     process.exitCode = 1;
-  })
-  .finally(async () => {
+  } finally {
     if (mongoose.connection.readyState !== 0) {
       await mongoose.disconnect();
     }
-  });
+  }
+};
+
+if (require.main === module) {
+  void main();
+}
+
+module.exports = { main, seedAdmin };

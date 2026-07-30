@@ -40,14 +40,13 @@ This prevents duplicate stock records for the same product in the same warehouse
 
 Stock quantity must not be changed directly.
 
-All stock changes should happen through business operations such as:
+All Phase 1 stock changes happen through the implemented business operations:
 
 * Goods receipt
 * Goods issue
-* Stock adjustment
-* Stock transfer
 
-Each operation should create a stock movement record.
+Each operation creates a stock movement record. Phase 1 exposes no stock-
+adjustment or stock-transfer operation.
 
 This keeps stock changes traceable and prevents unexplained quantity changes.
 
@@ -508,3 +507,95 @@ Business rules define how data changes.
 The API should reflect real inventory workflows rather than direct database manipulation.
 
 Whenever possible, inventory changes should be represented as business transactions instead of simple field updates.
+
+## Phase 1 system and deployment boundaries
+
+The end-of-Phase-1 system remains a JavaScript/CommonJS modular monolith. HTTP
+presentation, application/domain coordination, and persistence have explicit
+responsibilities, while one process and one MongoDB deployment keep operational
+complexity appropriate to the project.
+
+```mermaid
+flowchart LR
+  Client["Public client"] -->|"HTTP, optional Bearer token"| API["Express API and public Swagger"]
+  API -->|"validated commands and request context"| Services["Application/domain services"]
+  Services -->|"session-bound reads and writes"| Models["Mongoose models"]
+  Models -->|"authenticated connection"| Mongo[("MongoDB replica set")]
+  Platform["Render environment variables"] -->|"runtime configuration and secrets"| API
+  Operator["Authorized operator"] -->|"dry-run then explicit apply"| Migrations["Phase 1 migration scripts"]
+  Migrations --> Mongo
+  CI["GitHub Actions"] -->|"repository-only verification"| Build["Tests, audits, OpenAPI, Docker smoke"]
+```
+
+The HTTP layer assigns the legacy or v1 contract, authenticates and authorizes,
+validates input, and translates between Express and plain service commands.
+Controllers do not own transaction or domain rules. Application services own
+lifecycle, optimistic compare-and-swap, referential integrity, inventory
+arithmetic, idempotent execution, and transactional event collection. Mongoose
+models own persistence shape and schema indexes; explicit migrations own
+production index rollout. Inventory, StockMovement, AuditEvent, OutboxEvent, and
+keyed IdempotencyRecord completion share the appropriate MongoDB transaction.
+
+Canonical `/api/v1` uses `{data,meta}` success envelopes and a stable
+machine-readable error object. The temporary `/api` alias uses the same router
+and domain behavior with legacy presentation. All collection reads are bounded,
+use allowlisted filters and projections, and implement `(createdAt, _id)` cursor
+pagination. The read-index strategy places exact equality fields before that
+cursor boundary and deliberately avoids every possible filter permutation.
+
+## Configuration and release topology
+
+`src/config/environment.js` parses supported runtime environments, ports,
+MongoDB schemes, JWT lifetime, bounded connection retries, and the public
+Swagger URL before any database connection or HTTP listener. Production also
+rejects short and known-placeholder JWT secrets. Validation returns normalized
+configuration without mutating global state or including rejected values in
+errors. Admin seed values are validated by a separate seed-only entry point and
+are not API startup requirements.
+
+The Dockerfile builds from Node 22 Alpine, installs production dependencies,
+defaults to `NODE_ENV=production`, exposes port 3000, and runs as `node`.
+Compose overrides the runtime to `development` because it is the documented
+local topology; it retains the same production-built image, a persistent MongoDB
+8 single-node replica set, health checks, and an explicit seed profile. This
+keeps local placeholders usable without weakening production validation.
+Render remains the production topology: the platform injects MongoDB and JWT
+secrets, the service starts with `NODE_ENV=production`, and `/health` is the
+configured liveness path.
+
+GitHub Actions has read-only repository permissions and no application,
+database, or deployment credentials. Its gates are deterministic install,
+production and full dependency audits, repository/security and syntax checks,
+the complete Jest suite, formal OpenAPI validation, Docker build, Compose
+configuration, and an isolated local runtime smoke test. It neither deploys nor
+runs a remote migration. Database migrations remain dry-run-first operator
+procedures in `docs/production-data-notes.md`.
+
+## Trust boundaries
+
+- **Public client to API:** every value is untrusted. Helmet, body/query
+  validation, bounded JSON, rate limiting, request-context validation, and the
+  public error presenters constrain this boundary.
+- **Authenticated API boundary:** a verified JWT identifies an active User;
+  RBAC is applied before protected controllers and before idempotent replay.
+- **Application to MongoDB:** only configured application/model code constructs
+  queries. Transactions, conditional updates, indexes, and schema validation
+  protect consistency; the connection credential stays outside source and logs.
+- **Deployment platform to secrets:** Render injects values at runtime. Startup
+  validates their shape and production policy but never prints them.
+- **CI to repository:** CI checks repository and local containers only. It has no
+  Atlas/Render credentials and no release mutation authority.
+- **Operator to migrations:** the operator chooses the exact database, reviews
+  dry-run evidence and backups, authorizes apply, and performs post-apply index
+  and smoke verification.
+
+## Intentional Phase 1 limitations
+
+Public Swagger is intentional for portfolio and demo visibility; protected
+operations still require Bearer authentication and RBAC. Outbox records are
+persisted atomically but are not delivered. Phase 1 has no delivery worker,
+webhook delivery, n8n integration, external message broker, machine-to-machine
+or service-to-service authentication, frontend, microservice decomposition,
+AWS deployment, distributed tracing platform, SIEM integration, managed secret
+platform, advanced load testing, multi-region deployment, Orders domain, or
+Suppliers domain. Those limits are explicit rather than implied future behavior.

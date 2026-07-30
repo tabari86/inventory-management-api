@@ -1,9 +1,11 @@
 require("dotenv").config({ quiet: true });
 
-const app = require("./app");
+const { createApp } = require("./app");
 const connectDatabase = require("./config/database");
 const { closeDatabase } = require("./config/database");
+const { parseEnvironment } = require("./config/environment");
 const { logger } = require("./config/logger");
+const swaggerSpec = require("./config/swagger");
 const { runtimeLifecycle } = require("./runtime/lifecycle");
 const { startApplication } = require("./runtime/startup");
 const {
@@ -11,27 +13,9 @@ const {
   registerSignalHandlers,
 } = require("./runtime/shutdown");
 
-const requiredEnvironmentVariables = ["MONGODB_URI", "JWT_ACCESS_SECRET"];
-
-const validateRequiredEnvironment = (environment = process.env) => {
-  const missing = requiredEnvironmentVariables.filter(
-    (name) => !environment[name]
-  );
-  if (missing.length > 0) {
-    throw new Error(
-      `Missing required environment variables: ${missing.join(", ")}`
-    );
-  }
-};
-
-const resolvePort = (value) => {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 3000;
-};
-
 const main = async ({
-  appInstance = app,
-  connectDatabaseFn = () => connectDatabase({ logger }),
+  appInstance,
+  connectDatabaseFn,
   closeDatabaseFn = closeDatabase,
   lifecycle = runtimeLifecycle,
   applicationLogger = logger,
@@ -41,10 +25,10 @@ const main = async ({
     processRef.exit(code);
   },
 } = {}) => {
-  const port = resolvePort(environment.PORT);
+  let configuration;
 
   try {
-    validateRequiredEnvironment(environment);
+    configuration = parseEnvironment(environment);
   } catch (_error) {
     lifecycle.markFailed();
     applicationLogger.log("application_startup_failed", {
@@ -56,13 +40,33 @@ const main = async ({
     return null;
   }
 
+  const application =
+    appInstance ||
+    createApp({
+      swaggerDocument: swaggerSpec.createSwaggerSpec({
+        productionServerUrl: configuration.swaggerProductionUrl,
+      }),
+    });
+  const databaseConnector =
+    connectDatabaseFn ||
+    (() =>
+      connectDatabase({
+        logger: applicationLogger,
+        configuration: {
+          mongodbUri: configuration.mongodbUri,
+          nodeEnv: configuration.nodeEnv,
+          dbConnectRetries: configuration.dbConnectRetries,
+          dbConnectRetryDelayMs: configuration.dbConnectRetryDelayMs,
+        },
+      }));
+
   const server = await startApplication({
-    app: appInstance,
-    connectDatabase: connectDatabaseFn,
+    app: application,
+    connectDatabase: databaseConnector,
     closeDatabase: closeDatabaseFn,
     lifecycle,
     logger: applicationLogger,
-    port,
+    port: configuration.port,
     exit,
   });
   if (!server) return null;
@@ -85,7 +89,4 @@ if (require.main === module) {
 
 module.exports = {
   main,
-  requiredEnvironmentVariables,
-  resolvePort,
-  validateRequiredEnvironment,
 };

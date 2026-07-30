@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -10,8 +13,9 @@ on:
 
 jobs:
   test:
-    name: Run automated tests
+    name: Verify Phase 1 release gates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -26,8 +30,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Report complete dependency audit
+        run: npm audit --audit-level=critical
+
+      - name: Verify repository security policy
+        run: npm run verify:security
+
+      - name: Verify JavaScript syntax
+        run: npm run verify:syntax
+
       - name: Run tests
         run: npm test
 
+      - name: Validate OpenAPI document
+        run: npm run validate:openapi
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
       - name: Build Docker image
         run: docker build --tag inventory-management-api:ci .
+
+      - name: Verify Docker runtime
+        run: npm run verify:docker

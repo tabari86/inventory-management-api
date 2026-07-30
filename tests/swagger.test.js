@@ -1,19 +1,24 @@
 const SwaggerParser = require("@apidevtools/swagger-parser");
 const {
+  validateOpenApi,
+  validatePublicContent,
+} = require("../scripts/validateOpenApi");
+const {
   mutationOperationRegistry,
 } = require("../src/services/inventoryOperationRegistry");
 
 const defaultProductionUrl =
   "https://inventory-management-api-6zuo.onrender.com";
-const originalProductionUrl = process.env.SWAGGER_PRODUCTION_URL;
-
-const loadSwaggerSpec = () => {
+const loadSwaggerSpec = (productionServerUrl) => {
   jest.resetModules();
-  return require("../src/config/swagger");
+  const document = require("../src/config/swagger");
+  return productionServerUrl
+    ? document.createSwaggerSpec({ productionServerUrl })
+    : document;
 };
 
-delete process.env.SWAGGER_PRODUCTION_URL;
 const swaggerSpec = loadSwaggerSpec();
+const cloneSwaggerSpec = () => JSON.parse(JSON.stringify(swaggerSpec));
 
 const httpMethods = new Set([
   "get",
@@ -89,14 +94,6 @@ const operationsWithServerErrors = [
 ];
 
 describe("Swagger/OpenAPI specification", () => {
-  afterEach(() => {
-    if (originalProductionUrl === undefined) {
-      delete process.env.SWAGGER_PRODUCTION_URL;
-    } else {
-      process.env.SWAGGER_PRODUCTION_URL = originalProductionUrl;
-    }
-  });
-
   it("is a formally valid OpenAPI document", async () => {
     await expect(SwaggerParser.validate(swaggerSpec)).resolves.toBeDefined();
   });
@@ -241,13 +238,87 @@ describe("Swagger/OpenAPI specification", () => {
 
   it("supports a production server URL override", () => {
     const overrideUrl = "https://inventory-api.example.com";
-    process.env.SWAGGER_PRODUCTION_URL = overrideUrl;
-
-    const overriddenSpec = loadSwaggerSpec();
+    const overriddenSpec = loadSwaggerSpec(overrideUrl);
     const serverUrls = overriddenSpec.servers.map((server) => server.url);
 
     expect(serverUrls).toContain("http://localhost:3000");
     expect(serverUrls).toContain(overrideUrl);
+  });
+
+  it("contains no credentials, connection strings, private keys, or token literals", () => {
+    const serializedSpec = JSON.stringify(swaggerSpec);
+    const privateKeyPrefix = ["-----", "BEGIN "].join("");
+
+    expect(serializedSpec).not.toMatch(/mongodb(?:\+srv)?:\/\//i);
+    expect(serializedSpec).not.toMatch(
+      /\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b/
+    );
+    expect(serializedSpec).not.toContain(privateKeyPrefix);
+  });
+
+  it("rejects a generic credential-bearing HTTPS URL without exposing credentials", () => {
+    const username = "url-user-marker";
+    const password = "url-password-marker";
+    const document = cloneSwaggerSpec();
+    document.info.description += ` https://${username}:${password}@public.example.com/reference`;
+
+    const errors = validatePublicContent(document);
+    const serializedErrors = JSON.stringify(errors);
+
+    expect(errors).toContain(
+      "The OpenAPI document contains an HTTP(S) URL with credentials"
+    );
+    expect(serializedErrors).not.toContain(username);
+    expect(serializedErrors).not.toContain(password);
+  });
+
+  it("rejects an internal-only hostname in an HTTP URL", () => {
+    const document = cloneSwaggerSpec();
+    document.info.description += " See https://inventory.service.internal/reference";
+
+    expect(validatePublicContent(document)).toContain(
+      "The OpenAPI document contains an internal-only hostname"
+    );
+  });
+
+  it.each([
+    "10.20.30.40",
+    "172.16.0.1",
+    "172.31.255.254",
+    "192.168.20.10",
+    "169.254.20.10",
+  ])("rejects the private or link-local IPv4 host %s", (hostname) => {
+    const document = cloneSwaggerSpec();
+    document.info.description += ` See http://${hostname}/reference`;
+
+    expect(validatePublicContent(document)).toContain(
+      "The OpenAPI document contains a private or link-local IPv4 host"
+    );
+  });
+
+  it("does not treat ordinary prose containing internal as a URL", () => {
+    const document = cloneSwaggerSpec();
+    document.info.description += " Internal implementation notes are omitted.";
+
+    expect(validatePublicContent(document)).toEqual([]);
+  });
+
+  it("allows the intentional localhost development URL", () => {
+    const document = cloneSwaggerSpec();
+    document.info.description += " See http://localhost:3000/api-docs";
+
+    expect(validatePublicContent(document)).toEqual([]);
+  });
+
+  it("allows the public HTTPS Render production URL", () => {
+    const document = cloneSwaggerSpec();
+    document.info.description += ` See ${defaultProductionUrl}/api-docs`;
+
+    expect(validatePublicContent(document)).toEqual([]);
+  });
+
+  it("passes complete public-content validation for the real Swagger document", async () => {
+    await expect(validateOpenApi(swaggerSpec)).resolves.toBe(swaggerSpec);
   });
 
   it.each([

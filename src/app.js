@@ -23,6 +23,7 @@ const createApp = ({
   lifecycle = runtimeLifecycle,
   databaseConnection = mongoose.connection,
   logger = defaultLogger,
+  swaggerDocument = swaggerSpec,
 } = {}) => {
   const app = express();
 
@@ -58,7 +59,7 @@ const createApp = ({
   app.use(createHealthRouter({ lifecycle, databaseConnection }));
 
   // Swagger UI is intentionally public for portfolio and demo visibility.
-  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
   app.use("/api/v1", apiRouter);
   app.use("/api/v1", (req, res) =>

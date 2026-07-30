@@ -1,4 +1,23 @@
-# Production data compatibility notes
+# Phase 1 migration runbook
+
+This is the authoritative runbook for Phase 1 database changes. The application
+never runs these scripts at startup, and production connections use
+`autoIndex: false`.
+
+Run the migrations in this order:
+
+1. `phase1LifecycleVersion`
+2. `phase1IdempotencyIndexes`
+3. `phase1AuditOutboxIndexes`
+4. `phase1ApiReadIndexes`
+
+For every target, inject `MONGODB_URI` through the operator environment, run
+dry-run first, verify the exact target database from the safe summary, resolve
+every blocker, and apply only after approval. Never paste or print a connection
+string or credentials in documentation, chat, tickets, or command output. Rerun
+dry-run after apply and independently inspect the resulting indexes. Maintain a
+current backup and an environment-specific rollback decision; these additive
+scripts do not provide automatic down migrations.
 
 Before deploying these model constraints against existing data:
 
@@ -6,7 +25,8 @@ Before deploying these model constraints against existing data:
 - Check historical stock movements for movement types other than `GOODS_RECEIPT` and `GOODS_ISSUE` before enforcing the restricted enum.
 - Treat expired refresh-token cleanup, JWT secret rotation, and removal or deactivation of unauthorized users as separate production operations.
 
-These checks are deployment tasks; this repository does not claim they have already been performed on production data.
+These checks are deployment tasks. Supplied production evidence and local WP8
+verification are separated under **Production evidence boundary** below.
 
 ## Lifecycle/version migration prerequisite
 
@@ -122,8 +142,8 @@ The production rollout order is:
 6. Deploy the application code.
 7. Smoke-test an original keyed mutation, replay, conflict, and an unkeyed call.
 
-This repository does not claim that either production migration command has
-been executed. Completed records expire seven days after completion, but the
+Production execution of this migration was not independently established in
+this WP8 session. Completed records expire seven days after completion, but the
 MongoDB TTL monitor removes them asynchronously. A still-present expired record
 remains authoritative; the key can be reused after physical removal. There is
 no application cleanup job or request-time deletion.
@@ -246,7 +266,103 @@ Production rollout order, to be performed independently of this implementation:
    including a cross-version idempotent replay.
 
 No production database, MongoDB Atlas database, migration, index creation,
-deployment, commit, or push was accessed or performed as part of WP7.
+deployment, commit, or push was accessed or performed in this WP8 session.
+
+## Procedure acceptance criteria
+
+The detailed behavior above and the following acceptance criteria must both be
+reviewed before each apply.
+
+### Lifecycle/version acceptance
+
+- **Affected collections:** `products`, `warehouses`, `stocks`, and
+  `stockmovements`.
+- **Prerequisites:** read/update/index privileges, a reviewed backup, no
+  competing migration, and an operational decision for every orphan Stock.
+- **Expected dry-run:** invalid version counts, orphan relationships, legacy
+  movement state, duplicate numeric `(stockId, aggregateVersion)` candidates,
+  and owned-index compatibility; no write.
+- **Expected apply:** converge invalid aggregate versions to `1`, derive guards
+  for resolvable parents, add only derivable direct movement references, and
+  create the compatible partial unique index when absent.
+- **Blocking conditions:** duplicate numeric movement versions or an
+  incompatible owned index stop apply before updates. Orphans are not deleted
+  or fabricated and block safe lifecycle rollout because runtime guards fail
+  closed.
+- **Re-run and verification:** re-running is idempotent. Run post-apply dry-run,
+  confirm applicable invalid counts are zero, review every orphan/legacy count,
+  inspect partial-index semantics, and smoke-test lifecycle, Stock creation,
+  receipt, issue, and movement reads.
+- **Rollback limitation:** do not decrement versions or erase lifecycle/history
+  fields. Index removal is a separate reviewed operation.
+
+### Idempotency-index acceptance
+
+- **Affected collection:** `idempotencyrecords`.
+- **Prerequisites:** lifecycle migration complete, index privileges, and review
+  of existing records for duplicate valid scopes.
+- **Expected dry-run:** collection existence, duplicate-scope count, and state
+  of the ordered unique scope index and single-field TTL index; no write.
+- **Expected apply:** create only missing compatible indexes. If the collection
+  is absent, MongoDB may create it with the first index; documents are not
+  modified.
+- **Blocking conditions:** duplicate valid scopes, incompatible reserved or
+  related indexes, wrong uniqueness/key order, or wrong TTL semantics.
+- **Re-run and verification:** semantically equivalent alternate names are
+  accepted. Run post-apply dry-run, inspect both index definitions, and test an
+  original keyed mutation, replay, conflict, and unkeyed mutation.
+- **Rollback limitation:** removing either index can permit duplicate execution
+  or prevent expiry cleanup and requires a separate approved procedure.
+
+### Audit/outbox-index acceptance
+
+- **Affected collections:** `auditevents` and `outboxevents`.
+- **Prerequisites:** idempotency migration complete, index privileges, and
+  review for duplicate Audit IDs, Outbox event IDs, and aggregate
+  type/ID/version identities.
+- **Expected dry-run:** collection existence, duplicate-group counts, any TTL
+  indexes, and all owned-index states; no write.
+- **Expected apply:** create only missing compatible indexes. First index
+  creation can create an absent collection, but no historical event is inserted.
+- **Blocking conditions:** any duplicate identity, incompatible reserved or
+  related index, or any TTL index on either collection.
+- **Re-run and verification:** compatible alternate names are accepted. Run
+  post-apply dry-run, inspect every index option, and smoke-test a mutation,
+  no-op, replay, and expected event counts.
+- **Rollback limitation:** committed events are business records. Index removal
+  or retention changes require separate review. Pending OutboxEvents accumulate
+  because Phase 1 has no delivery worker.
+
+### API read-index acceptance
+
+- **Affected collections:** `products`, `warehouses`, `stocks`, and
+  `stockmovements`.
+- **Prerequisites:** the prior three migrations complete; all four collections
+  exist; every row has a BSON Date `createdAt`; and the Product SKU, Warehouse
+  code, Stock relationship, and StockMovement aggregate-version integrity
+  indexes are semantically compatible.
+- **Expected dry-run:** collection/data integrity, prerequisite index state, and
+  every read-index plan; no collection or index creation.
+- **Expected apply:** create only absent compatible read indexes; never rewrite
+  documents or repair prerequisites.
+- **Blocking conditions:** missing collection, invalid/missing `createdAt`,
+  missing or incompatible prerequisite, or incompatible reserved/related read
+  index. Any blocker prevents all read-index creation.
+- **Re-run and verification:** re-running is idempotent. Run post-apply dry-run,
+  inspect ordered definitions, and test first/next pages in both directions and
+  supported filters on `/api/v1` and `/api`.
+- **Rollback limitation:** dropping read indexes does not roll back cursor
+  contracts and can cause query regressions; require measured query-plan
+  evidence and separate approval.
+
+## Production evidence boundary
+
+For the baseline supplied with WP8, the lifecycle/version and API read-index
+migrations were externally reported as applied and verified. This is evidence
+provided by the repository owner, not verification performed by Codex in this
+session. The production state of the idempotency and audit/outbox migrations was
+not independently established here. No remote database connection or migration
+was attempted during WP8.
 
 ## Operational runtime deployment
 

@@ -3,9 +3,9 @@ const {
   mutationOperationRegistry,
 } = require("../services/inventoryOperationRegistry");
 
-const productionServerUrl =
-  process.env.SWAGGER_PRODUCTION_URL ||
+const DEFAULT_PRODUCTION_SERVER_URL =
   "https://inventory-management-api-6zuo.onrender.com";
+const productionServerUrl = DEFAULT_PRODUCTION_SERVER_URL;
 
 const swaggerOptions = {
   definition: {
@@ -1047,5 +1047,21 @@ for (const { method, path, operationId } of mutationOperationRegistry) {
     };
   }
 }
+
+const createSwaggerSpec = ({
+  productionServerUrl: configuredProductionUrl = DEFAULT_PRODUCTION_SERVER_URL,
+} = {}) => {
+  const document = structuredClone(swaggerSpec);
+  const productionServer = document.servers.find(
+    ({ description }) => description === "Production server on Render"
+  );
+  productionServer.url = configuredProductionUrl || DEFAULT_PRODUCTION_SERVER_URL;
+  return document;
+};
+
+Object.defineProperties(swaggerSpec, {
+  createSwaggerSpec: { value: createSwaggerSpec },
+  DEFAULT_PRODUCTION_SERVER_URL: { value: DEFAULT_PRODUCTION_SERVER_URL },
+});
 
 module.exports = swaggerSpec;

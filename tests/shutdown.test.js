@@ -98,7 +98,7 @@ describe("Graceful shutdown", () => {
   it("fails safely when database close rejects without closing resources twice", async () => {
     const lifecycle = createRuntimeLifecycle();
     lifecycle.markReady();
-    const privateMarker = "mongodb://user:password@private-host/database";
+    const privateMarker = "mongodb://user:password@private-host.invalid/database";
     const server = {
       listening: true,
       close: jest.fn((callback) => {

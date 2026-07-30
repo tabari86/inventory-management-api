@@ -1,18 +1,14 @@
 services:
   api:
     build: .
-    container_name: inventory-management-api
     ports:
-      - "3000:3000"
+      - "${API_HOST_PORT:-3000}:3000"
     environment:
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: 3000
       MONGODB_URI: mongodb://mongo:27017/inventory_management?replicaSet=rs0
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-docker_local_access_token_secret}
       JWT_ACCESS_EXPIRES_IN: 15m
-      ADMIN_NAME: ${ADMIN_NAME:-Local Admin}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_this_local_admin_password}
     depends_on:
       mongo:
         condition: service_healthy
@@ -27,6 +23,7 @@ services:
     build: .
     profiles: ["seed"]
     environment:
+      NODE_ENV: development
       MONGODB_URI: mongodb://mongo:27017/inventory_management?replicaSet=rs0
       ADMIN_NAME: ${ADMIN_NAME:-Local Admin}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
@@ -39,10 +36,9 @@ services:
 
   mongo:
     image: mongo:8
-    container_name: inventory-management-mongo
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     ports:
-      - "27017:27017"
+      - "${MONGO_HOST_PORT:-27017}:27017"
     volumes:
       - mongo_data:/data/db
     healthcheck:

@@ -100,7 +100,7 @@ describe("Global error handler", () => {
     const response = createResponse();
     const logger = { log: jest.fn() };
     const handler = createErrorHandler(logger);
-    const privateMarker = "mongodb://user:password@private-host/database";
+    const privateMarker = "mongodb://user:password@private-host.invalid/database";
     const error = new DomainError({
       code: errorCodes.DEPENDENCY_UNAVAILABLE,
       httpStatus: 503,

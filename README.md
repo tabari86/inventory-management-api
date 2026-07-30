@@ -10,11 +10,13 @@
 ![Tests](https://img.shields.io/badge/Tests-Jest%20%2B%20Supertest-green)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-blue)
 ![Deployment](https://img.shields.io/badge/Deployment-Render-purple)
-![Status](https://img.shields.io/badge/Status-Production--Oriented-success)
 
 Inventory Management API is a Node.js and Express backend for managing products, warehouses, stock records and inventory workflows.
 
 The project focuses on realistic backend concerns such as authentication, role-based access control, controlled user provisioning, bulk inventory operations and stock movement history. It is built as a backend portfolio project and not as a full warehouse management system.
+
+Phase 1 release-hardened backend portfolio project with documented operational
+limitations.
 
 ---
 
@@ -32,7 +34,8 @@ The API covers:
 - controlled user creation
 - bulk operations for import and automation scenarios
 
-The project is suitable for integration-focused use cases such as internal admin tools, warehouse workflows, automation processes or n8n-based inventory scenarios.
+The project is suitable for integration-focused use cases such as internal
+admin tools, warehouse workflows, and controlled automation clients.
 
 ---
 
@@ -147,10 +150,13 @@ The API uses three roles:
 - Public Swagger UI for portfolio/demo visibility
 - Protected API operations still require Bearer authentication
 - Required startup environment validation
+- Production JWT placeholder and length rejection before database startup
+- Repository secret-policy verification and production dependency audit gates
 - Bounded MongoDB connection retry handling
 - Production 5xx responses hide internal error details
 - OpenAPI specification validation in the automated test suite
-- Static validation for Docker, Docker Compose, Render and CI configuration
+- Formal OpenAPI and sensitive-content validation
+- Docker build, Compose configuration, and isolated non-root runtime smoke gates
 
 
 ### Inventory Management
@@ -817,6 +823,7 @@ Copy-Item .env.example .env
 Example values:
 
 ```bash
+NODE_ENV=development
 PORT=3000
 MONGODB_URI=mongodb://localhost:27017/inventory_management?replicaSet=rs0&directConnection=true
 JWT_ACCESS_SECRET=change_this_access_token_secret
@@ -834,20 +841,32 @@ ADMIN_PASSWORD=change_this_admin_password
 
 The `.env` file is ignored by Git and should not be committed.
 
-For production deployments, use strong secret values and do not commit real credentials.
+`NODE_ENV` accepts `development`, `test`, or `production`. Startup also
+validates the port, MongoDB URI scheme, access-token duration, bounded database
+retries, and optional Swagger URL. Production JWT secrets must contain at least
+32 characters and cannot use the example, Docker, test, or obvious placeholder
+values. Invalid configuration exits before a database connection is attempted
+and does not log the rejected value.
+
+`ADMIN_NAME`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` are used only by
+`npm run seed:admin`; normal API startup does not require them. Production
+secrets are injected by the deployment platform. See
+[`docs/security.md`](docs/security.md) for rotation and incident policy.
 
 ---
 
 ## Production and Data Notes
 
-This repository includes a short production data note in:
+The authoritative dry-run-first Phase 1 migration runbook is:
 
 ```text
 docs/production-data-notes.md
 
 ```
 
-Before using an existing production database, the following data-related checks should be reviewed:
+It defines the required lifecycle/version -> idempotency -> audit/outbox -> API
+read-index order, blocking conditions, idempotent re-runs, verification, and
+rollback limits. Before using an existing production database, review:
 
 - existing mixed-case product SKUs
 - existing stock movement types
@@ -885,10 +904,11 @@ npm run migrate:phase1-audit-outbox -- --apply
 
 Run dry-run against the intended database, inspect both collection/index plans
 and duplicate counts, apply explicitly, rerun dry-run, verify compatible
-indexes, then deploy and smoke-test runtime code. Codex did not execute this
-migration against production. It creates no historical events: Audit and
-Outbox history begins at cutover. Pending OutboxEvents accumulate until a
-future delivery worker exists, and Audit/delivered-Outbox retention is deferred.
+indexes, then deploy and smoke-test runtime code. Its production execution was
+not independently established in this WP8 session. It creates no historical
+events: Audit and Outbox history begins at cutover. Pending OutboxEvents
+accumulate until a future delivery worker exists, and Audit/delivered-Outbox
+retention is deferred.
 
 WP7 read indexes use a separate dry-run-first, no-drop migration. Production
 startup uses `autoIndex: false`. Before any index creation, the migration
@@ -911,7 +931,9 @@ prerequisite index and never creates an empty missing collection. Operators
 must investigate blockers and use the owning historical migration or an
 explicitly approved remediation plan. With a clean preflight, apply creates
 only absent compatible WP7 read indexes and never modifies documents or
-introduces TTL indexes. No production migration or deployment was performed.
+introduces TTL indexes. The lifecycle and API read-index migrations were
+externally reported as applied and verified before WP8; this session did not
+connect to or modify the production database.
 
 These checks are operational deployment tasks and are not executed automatically by the application.
 
@@ -967,6 +989,13 @@ Build and start the API together with MongoDB:
 docker compose up --build
 ```
 
+Compose is intentionally the local-development runtime and overrides
+`NODE_ENV=development`, so its documented JWT/admin placeholders are never
+accepted as production credentials. The same image defaults to
+`NODE_ENV=production`, contains production dependencies only, and runs as the
+non-root `node` user. Render also runs in production mode with platform-injected
+secrets.
+
 Compose runs MongoDB 8 as a single-node replica set named `rs0`. Its health
 check initializes the replica set when needed and waits for the node to become
 primary before starting the API. The API container connects through:
@@ -1014,7 +1043,9 @@ Stop the containers:
 ```bash
 docker compose down
 ```
-The seed step is intentionally separated from normal application startup. It should be run only when an initial.
+The seed step is intentionally separated from normal application startup. Run
+it only when an initial administrator is required, then treat the bootstrap
+password as a temporary operational credential.
 
 If the admin user has not been created yet, run the seed command with the correct environment variables:
 
@@ -1070,11 +1101,32 @@ Run tests:
 npm test
 ```
 
+Release verification commands:
+
+```bash
+npm ci
+npm audit --omit=dev --audit-level=high
+npm run verify:security
+npm run verify:syntax
+npm run validate:openapi
+docker compose config --quiet
+npm run verify:docker
+```
+
+`verify:docker` uses an isolated Compose project and temporary local ports,
+checks liveness/readiness, container health, and the non-root runtime user, then
+removes its containers and volumes even after failure.
+
 ---
 
 ## Documentation
 
 Interactive API documentation is available through Swagger UI.
+
+- [Architecture](docs/architecture.md)
+- [Phase 1 migration runbook](docs/production-data-notes.md)
+- [Security policy](docs/security.md)
+- [Final Phase 1 audit](docs/phase1-audit.md)
 
 Local Swagger UI:
 
@@ -1098,110 +1150,43 @@ https://inventory-management-api-6zuo.onrender.com/api-docs
 
 ```text
 inventory-management-api/
-|
-|-- .github/
-|   `-- workflows/
-|       `-- ci.yml
-|
+|-- .github/workflows/ci.yml
 |-- scripts/
+|   |-- migrations/
+|   |   |-- phase1LifecycleVersion.js
+|   |   |-- phase1IdempotencyIndexes.js
+|   |   |-- phase1AuditOutboxIndexes.js
+|   |   `-- phase1ApiReadIndexes.js
 |   |-- seedAdmin.js
-|   `-- migrations/
-|       `-- phase1LifecycleVersion.js
-|
+|   |-- validateOpenApi.js
+|   |-- verifyDocker.js
+|   |-- verifyJavaScriptSyntax.js
+|   `-- verifyRepositorySecurity.js
 |-- src/
 |   |-- app.js
 |   |-- server.js
-|   |
 |   |-- config/
+|   |   |-- environment.js
 |   |   |-- database.js
+|   |   |-- logger.js
 |   |   `-- swagger.js
-|   |
-|   |-- errors/
-|   |   |-- DomainError.js
-|   |   `-- errorCodes.js
-|   |
 |   |-- controllers/
-|   |   |-- authController.js
-|   |   |-- userController.js
-|   |   |-- productController.js
-|   |   |-- warehouseController.js
-|   |   |-- stockController.js
-|   |   |-- stockMovementController.js
-|   |   |-- goodsReceiptController.js
-|   |   `-- goodsIssueController.js
-|   |
+|   |-- errors/
+|   |-- http/
 |   |-- middleware/
-|   |   |-- authMiddleware.js
-|   |   |-- roleMiddleware.js
-|   |   |-- validateRequest.js
-|   |   |-- loginRateLimiter.js
-|   |   `-- errorHandler.js
-|   |
 |   |-- models/
-|   |   |-- User.js
-|   |   |-- RefreshToken.js
-|   |   |-- Product.js
-|   |   |-- Warehouse.js
-|   |   |-- Stock.js
-|   |   `-- StockMovement.js
-|   |
-|   |-- services/
-|   |   |-- inventoryService.js
-|   |   |-- stockService.js
-|   |   |-- productService.js
-|   |   `-- warehouseService.js
-|   |
-|   |-- utils/
-|   |   `-- transaction.js
-|   |
 |   |-- routes/
-|   |   |-- authRoutes.js
-|   |   |-- userRoutes.js
-|   |   |-- productRoutes.js
-|   |   |-- warehouseRoutes.js
-|   |   |-- stockRoutes.js
-|   |   |-- stockMovementRoutes.js
-|   |   |-- goodsReceiptRoutes.js
-|   |   `-- goodsIssueRoutes.js
-|   |
+|   |-- runtime/
+|   |-- services/
+|   |-- utils/
 |   `-- validators/
-|       |-- userValidator.js
-|       |-- productValidator.js
-|       |-- warehouseValidator.js
-|       |-- stockValidator.js
-|       |-- goodsReceiptValidator.js
-|       `-- goodsIssueValidator.js
-|
 |-- tests/
-|   |-- helpers/
-|   |   `-- authTestHelper.js
-|   |
-|   |-- app.test.js
-|   |-- auth.test.js
-|   |-- database.test.js
-|   |-- deploymentConfig.test.js
-|   |-- errorHandler.test.js
-|   |-- inventoryService.test.js
-|   |-- inventoryIntegrity.test.js
-|   |-- inventoryWorkflow.test.js
-|   |-- lifecycleVersion.test.js
-|   |-- migration.test.js
-|   |-- product.test.js
-|   |-- server.test.js
-|   |-- stock.test.js
-|   |-- stockService.test.js
-|   |-- stockMovement.test.js
-|   |-- swagger.test.js
-|   |-- transaction.test.js
-|   |-- user.test.js
-|   |-- warehouse.test.js
-|   `-- setupTestDb.js
-|
 |-- docs/
 |   |-- Swagger-UI.png
 |   |-- architecture.md
-|   `-- production-data-notes.md
-|
+|   |-- phase1-audit.md
+|   |-- production-data-notes.md
+|   `-- security.md
 |-- .env.example
 |-- .dockerignore
 |-- .gitignore
@@ -1217,74 +1202,31 @@ inventory-management-api/
 
 ## Current Status
 
-Implemented:
+Phase 1 implements the Inventory Core domains, transaction-safe lifecycle and
+inventory mutations, optimistic versions, referential guards, request context,
+idempotency, audit/outbox persistence, operational lifecycle/logging, canonical
+`/api/v1` plus bounded legacy compatibility, cursor reads/index migrations,
+central environment validation, public validated Swagger, security/release CI
+gates, and an isolated Docker runtime regression check.
 
-- product management API
-- warehouse management API
-- stock management API
-- controlled admin seeding
-- admin-only user creation
-- JWT authentication
-- refresh token rotation
-- refresh token revocation
-- login rate limiting
-- role-based access control
-- protected inventory endpoints
-- product bulk operations
-- warehouse bulk operations
-- stock bulk setup
-- goods receipt workflow
-- goods issue workflow
-- atomic Goods Receipt and Goods Issue transactions
-- all-or-nothing bulk inventory mutations
-- Product archive semantics with retained references and deprecated DELETE aliases
-- Product/Warehouse lifecycle metadata and transactional Stock guard propagation
-- explicit Product, Warehouse and Stock aggregate versions
-- optional legacy `expectedVersion` compare-and-swap preconditions
-- enriched StockMovement historical context and sequential aggregate versions
-- dry-run-first lifecycle/version migration with controlled partial unique index
-- read-only stock movement history
-- request validation with express-validator
-- SKU and warehouse-code normalization rules
-- security headers with Helmet
-- production-safe 5xx error responses
-- MongoDB connection retry handling
-- global error handling
-- Swagger / OpenAPI documentation
-- formal OpenAPI validation in tests
-- Docker support
-- Docker Compose setup with MongoDB
-- Docker Compose single-node MongoDB replica set
-- Docker Compose seed profile for initial admin creation
-- Render blueprint configuration
-- automated API and configuration tests
-- GitHub Actions CI workflow with Docker build step
-- deployment on Render
-- MongoDB Atlas production database connection
-
-Current focus:
-
-- production data verification
-- deployment verification after push
-- operational monitoring improvements
+The detailed evidence and limitations are recorded in
+[`docs/phase1-audit.md`](docs/phase1-audit.md). The baseline deployment was
+externally reported live before WP8; the current unstaged WP8 changes have not
+been committed, pushed, deployed, or production-smoke tested.
 
 ---
 
-## Roadmap
+## Known limitations and deferred Phase 2 scope
 
-Possible future improvements:
+Phase 1 intentionally has no Outbox delivery worker, webhook delivery, n8n or AI
+integration, external message broker, Orders or Suppliers domain,
+machine-to-machine/service-to-service authentication, frontend, microservice
+decomposition, AWS or multi-region deployment, managed secret platform,
+distributed tracing/SIEM integration, or advanced load-testing claim.
 
-- request-level audit metadata
-- pagination and filtering for larger datasets
-- improved operational logging
-- production monitoring and alerting
-- deployment smoke checks after Render release
-- stronger admin recovery workflow
-- database-level enforcement for one active admin if required
-- future domain migrations beyond the lifecycle/version cutover
-- distributed rate limiting for multi-instance deployments
-- a separately approved Outbox delivery worker
-- machine identity and future contract revisions beyond v1
+Other current limits are the process-local login limiter, a single-instance
+Render demo topology, public Swagger by design, and Outbox records that remain
+pending until a separately approved delivery design exists.
 
 ---
 

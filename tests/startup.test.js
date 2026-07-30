@@ -64,7 +64,7 @@ describe("Application startup", () => {
     const logger = createLogger();
     const exit = jest.fn();
     const closeDatabase = jest.fn().mockResolvedValue();
-    const privateMarker = "mongodb://user:password@private-host/database";
+    const privateMarker = "mongodb://user:password@private-host.invalid/database";
     const app = { listen: jest.fn() };
 
     const result = await startApplication({

@@ -19,20 +19,24 @@ const connectDatabase = async ({
   logger = defaultLogger,
   connect = mongoose.connect.bind(mongoose),
   waitFn = wait,
+  configuration,
 } = {}) => {
-  const maxRetries = parseNonNegativeInteger(
-    process.env.DB_CONNECT_RETRIES,
-    2
-  );
-  const retryDelayMs = parseNonNegativeInteger(
-    process.env.DB_CONNECT_RETRY_DELAY_MS,
-    1000
-  );
+  const databaseConfiguration = configuration || {
+    mongodbUri: process.env.MONGODB_URI,
+    nodeEnv: process.env.NODE_ENV,
+    dbConnectRetries: parseNonNegativeInteger(process.env.DB_CONNECT_RETRIES, 2),
+    dbConnectRetryDelayMs: parseNonNegativeInteger(
+      process.env.DB_CONNECT_RETRY_DELAY_MS,
+      1000
+    ),
+  };
+  const maxRetries = databaseConfiguration.dbConnectRetries;
+  const retryDelayMs = databaseConfiguration.dbConnectRetryDelayMs;
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      await connect(process.env.MONGODB_URI, {
-        autoIndex: process.env.NODE_ENV !== "production",
+      await connect(databaseConfiguration.mongodbUri, {
+        autoIndex: databaseConfiguration.nodeEnv !== "production",
       });
 
       logger.log("database_connected", { attempt: attempt + 1 });

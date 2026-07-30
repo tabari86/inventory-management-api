@@ -475,7 +475,7 @@ describe("WP7 API read-index definitions and migration", () => {
   );
 
   it("closes the injected connection and never logs the URI or credentials", async () => {
-    const privateUri = "mongodb://private-user:private-password@private-host/database";
+    const privateUri = "mongodb://private-user:private-password@private-host.invalid/database";
     const close = jest.fn().mockResolvedValue();
     const logger = { log: jest.fn(), error: jest.fn() };
     const connection = { db: {}, close };
