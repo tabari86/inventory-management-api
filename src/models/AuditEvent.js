@@ -9,6 +9,12 @@ const { snapshotBuilders } = require("../services/eventSnapshots");
 const { canonicalize } = require("../utils/canonicalJson");
 const { sha256 } = require("../utils/idempotencyHash");
 const { serializeBoundedJson } = require("../utils/boundedJson");
+const {
+  ACTOR_TYPES,
+  CONTEXT_ID_PATTERN,
+  CONTEXT_SOURCES,
+  isSupportedContextPair,
+} = require("../utils/applicationContext");
 
 const AUDIT_SCHEMA_VERSION = 1;
 const MAX_AUDIT_SNAPSHOT_BYTES = 16_384;
@@ -59,8 +65,12 @@ const immutableString = (options = {}) => ({
 
 const actorSchema = new mongoose.Schema(
   {
-    type: immutableString({ enum: ["user"], maxlength: 16 }),
-    id: immutableString({ minlength: 1, maxlength: 128 }),
+    type: immutableString({ enum: Object.values(ACTOR_TYPES), maxlength: 16 }),
+    id: immutableString({
+      minlength: 1,
+      maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
+    }),
   },
   { _id: false, strict: "throw" }
 );
@@ -122,10 +132,25 @@ const auditEventSchema = new mongoose.Schema(
     action: immutableString({ enum: operationIds, maxlength: 160 }),
     resource: { type: resourceSchema, required: true, immutable: true },
     outcome: immutableString({ enum: ["succeeded", "no_change"] }),
-    requestId: immutableString({ minlength: 1, maxlength: 128 }),
-    correlationId: immutableString({ minlength: 1, maxlength: 128 }),
-    causationId: immutableString({ minlength: 1, maxlength: 128 }),
-    source: immutableString({ enum: ["http-api"], maxlength: 32 }),
+    requestId: immutableString({
+      minlength: 1,
+      maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
+    }),
+    correlationId: immutableString({
+      minlength: 1,
+      maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
+    }),
+    causationId: immutableString({
+      minlength: 1,
+      maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
+    }),
+    source: immutableString({
+      enum: Object.values(CONTEXT_SOURCES),
+      maxlength: 32,
+    }),
     idempotency: {
       type: idempotencySchema,
       default: null,
@@ -277,8 +302,11 @@ const validateAuditMetadata = ({ metadata, outcome, resourceType }) => {
 };
 
 auditEventSchema.pre("validate", function validateBoundedFields() {
+  if (!isSupportedContextPair(this.source, this.actor?.type)) {
+    throw new Error("Unsupported application context pair");
+  }
   if (this.causationId !== this.requestId) {
-    throw new Error("HTTP audit causation must equal the request ID");
+    throw new Error("Audit causation must equal the request ID");
   }
   validateSnapshotEnvelope(this.before, this.resource?.type);
   validateSnapshotEnvelope(this.after, this.resource?.type);

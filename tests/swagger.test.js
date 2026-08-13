@@ -218,6 +218,25 @@ describe("Swagger/OpenAPI specification", () => {
     });
   });
 
+  it("documents the corrected Stock bulk and Product archive machine codes", () => {
+    const stockBulk = swaggerSpec.paths["/api/v1/stocks/bulk"].post.responses;
+    expect(stockBulk["400"]["x-error-codes"]).toEqual([
+      "VALIDATION_FAILED",
+    ]);
+    expect(stockBulk["409"]["x-error-codes"]).toEqual(
+      expect.arrayContaining(["DUPLICATE_RESOURCE"])
+    );
+
+    for (const path of [
+      "/api/v1/products/{id}",
+      "/api/v1/products/bulk",
+    ]) {
+      expect(
+        swaggerSpec.paths[path].delete.responses["409"]["x-error-codes"]
+      ).toEqual(expect.arrayContaining(["INVALID_RESOURCE_STATE"]));
+    }
+  });
+
   it("does not duplicate operation parameters", () => {
     for (const { operation } of documentedOperations()) {
       const identities = (operation.parameters || []).map((parameter) =>

@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 
+const DomainError = require("../src/errors/DomainError");
+const errorCodes = require("../src/errors/errorCodes");
 const IdempotencyRecord = require("../src/models/IdempotencyRecord");
 const AuditEvent = require("../src/models/AuditEvent");
 const OutboxEvent = require("../src/models/OutboxEvent");
@@ -32,6 +34,17 @@ const context = {
   actor: {
     type: "user",
     id: "64b64c6f2f0f000000000001",
+  },
+};
+
+const internalContext = {
+  requestId: "internal-action-001",
+  correlationId: "internal-action-001",
+  causationId: "internal-action-001",
+  source: "internal",
+  actor: {
+    type: "service",
+    id: "inventory-maintenance",
   },
 };
 
@@ -95,6 +108,127 @@ describe("idempotency executor failure and storage boundaries", () => {
       responseBody: body,
       responseSizeBytes: limit,
     });
+  });
+
+  it("executes and replays an approved internal service context through persistence", async () => {
+    const internalExecute = jest.fn(executeProduct);
+
+    const first = await execute({
+      context: internalContext,
+      execute: internalExecute,
+    });
+    const replay = await execute({
+      context: internalContext,
+      execute: internalExecute,
+    });
+
+    expect(first).toMatchObject({ statusCode: 201, replayed: false });
+    expect(replay).toMatchObject({ statusCode: 201, replayed: true });
+    expect(internalExecute).toHaveBeenCalledTimes(1);
+    await expect(IdempotencyRecord.findOne({}).lean()).resolves.toMatchObject({
+      actorType: "service",
+      actorId: "inventory-maintenance",
+      source: "internal",
+      state: "completed",
+    });
+    await expect(AuditEvent.findOne({}).lean()).resolves.toMatchObject({
+      actor: { type: "service", id: "inventory-maintenance" },
+      requestId: internalContext.requestId,
+      correlationId: internalContext.correlationId,
+      causationId: internalContext.requestId,
+      source: "internal",
+    });
+    await expect(OutboxEvent.findOne({}).lean()).resolves.toMatchObject({
+      requestId: internalContext.requestId,
+      correlationId: internalContext.correlationId,
+      causationId: internalContext.requestId,
+      source: "internal",
+    });
+  });
+
+  it("rejects context metadata before mutation and leaves no partial state", async () => {
+    const businessMutation = jest.fn(executeProduct);
+
+    await expect(
+      execute({
+        context: { ...internalContext, metadata: { token: "not-allowed" } },
+        execute: businessMutation,
+      })
+    ).rejects.toMatchObject({
+      code: errorCodes.VALIDATION_FAILED,
+      httpStatus: 500,
+      safeMessage: "Could not complete request",
+    });
+
+    expect(businessMutation).not.toHaveBeenCalled();
+    expect(await Product.countDocuments()).toBe(0);
+    expect(await IdempotencyRecord.countDocuments()).toBe(0);
+    expect(await AuditEvent.countDocuments()).toBe(0);
+    expect(await OutboxEvent.countDocuments()).toBe(0);
+  });
+
+  it.each([
+    ["user/http-api", "user", "http-api", true],
+    ["service/internal", "service", "internal", true],
+    ["user/internal", "user", "internal", false],
+    ["service/http-api", "service", "http-api", false],
+  ])("enforces the IdempotencyRecord %s pair", async (_label, actorType, source, valid) => {
+    const { requestHash, requestHashVersion } = hashCanonicalCommand(command);
+    const completedAt = new Date("2026-08-13T12:00:00.000Z");
+    const record = new IdempotencyRecord({
+      actorType,
+      actorId: actorType === "user" ? context.actor.id : internalContext.actor.id,
+      operationId,
+      keyHash: hashIdempotencyKey(`pair.${actorType}.${source}`),
+      requestHash,
+      requestHashVersion,
+      state: "completed",
+      originalRequestId: "pair-test",
+      originalCorrelationId: "pair-test",
+      source,
+      statusCode: 201,
+      responseBody: {},
+      responseSizeBytes: 2,
+      completedAt,
+      expiresAt: new Date(completedAt.getTime() + IdempotencyRecord.IDEMPOTENCY_RETENTION_MS),
+    });
+
+    const validation = record.validate();
+    if (valid) await expect(validation).resolves.toBeUndefined();
+    else await expect(validation).rejects.toThrow("Unsupported application context pair");
+  });
+
+  it("keeps identical user and service idempotency scopes independent", async () => {
+    const { requestHash, requestHashVersion } = hashCanonicalCommand(command);
+    const completedAt = new Date("2026-08-13T12:00:00.000Z");
+    const common = {
+      actorId: "shared-principal-id",
+      operationId,
+      keyHash: hashIdempotencyKey("shared.actor-type.scope"),
+      requestHash,
+      requestHashVersion,
+      state: "completed",
+      originalRequestId: "scope-test",
+      originalCorrelationId: "scope-test",
+      statusCode: 201,
+      responseBody: {},
+      responseSizeBytes: 2,
+      completedAt,
+      expiresAt: new Date(completedAt.getTime() + IdempotencyRecord.IDEMPOTENCY_RETENTION_MS),
+    };
+
+    await IdempotencyRecord.create([
+      { ...common, actorType: "user", source: "http-api" },
+      { ...common, actorType: "service", source: "internal" },
+    ]);
+
+    expect(await IdempotencyRecord.countDocuments()).toBe(2);
+    expect(
+      await IdempotencyRecord.distinct("actorType", {
+        operationId,
+        keyHash: common.keyHash,
+      })
+    ).toEqual(expect.arrayContaining(["user", "service"]));
   });
 
   it("declares exact model indexes and rejects processing outside a transaction", async () => {
@@ -169,16 +303,25 @@ describe("idempotency executor failure and storage boundaries", () => {
 
   it("rolls back the domain write when record completion fails", async () => {
     const originalSave = IdempotencyRecord.prototype.save;
+    const completionError = new Error("Injected completion failure");
     jest
       .spyOn(IdempotencyRecord.prototype, "save")
       .mockImplementation(function saveWithInjectedCompletionFailure(...args) {
         if (this.state === "completed") {
-          throw new Error("Injected completion failure");
+          throw completionError;
         }
         return originalSave.apply(this, args);
       });
 
-    await expect(execute()).rejects.toThrow("Injected completion failure");
+    const failure = await execute().catch((error) => error);
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+      retryable: false,
+      safeMessage: "Could not complete request",
+      cause: completionError,
+    });
     expect(await Product.countDocuments()).toBe(0);
     expect(await IdempotencyRecord.countDocuments()).toBe(0);
     expect(await AuditEvent.countDocuments()).toBe(0);

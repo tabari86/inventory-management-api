@@ -260,6 +260,9 @@ router.patch(
  *         description: One or more products were not found
  *       409:
  *         description: One or more products are active and must be deactivated before deletion
+ *         x-error-codes:
+ *           - INVALID_RESOURCE_STATE
+ *           - STALE_VERSION
  *       500:
  *         description: Could not delete products
  */
@@ -555,6 +558,9 @@ router.patch(
  *         description: Product not found
  *       409:
  *         description: Active products must be deactivated before archive or the expected version is stale
+ *         x-error-codes:
+ *           - INVALID_RESOURCE_STATE
+ *           - STALE_VERSION
  *       500:
  *         description: Could not delete product
  */

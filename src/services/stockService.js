@@ -3,6 +3,7 @@ const withTransaction = require("../utils/transaction");
 
 const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
+const normalizeServiceError = require("../errors/normalizeServiceError");
 const Product = require("../models/Product");
 const Stock = require("../models/Stock");
 const Warehouse = require("../models/Warehouse");
@@ -15,7 +16,21 @@ const {
 const createDomainError = (code, httpStatus, message, cause) =>
   new DomainError({ code, httpStatus, message, cause });
 
+const MAX_BULK_ITEMS = 150;
+const STOCK_VALIDATION_PATHS = Object.freeze({
+  productId: Object.freeze({ required: "Product ID is required" }),
+  warehouseId: Object.freeze({ required: "Warehouse ID is required" }),
+});
 const normalizeId = (id) => String(id).toLowerCase();
+
+const validationError = (field, message) =>
+  new DomainError({
+    code: errorCodes.VALIDATION_FAILED,
+    httpStatus: 400,
+    message,
+    retryable: false,
+    errors: [{ field, message }],
+  });
 
 const recordStockCreationEvents = ({
   stocks,
@@ -105,7 +120,11 @@ const recordStockCreationEvents = ({
   }
 };
 
-const assertStockIds = ({ productId, warehouseId }) => {
+const assertStockIds = (stock) => {
+  if (!stock || typeof stock !== "object" || Array.isArray(stock)) {
+    throw validationError("stock", "Stock command must be an object");
+  }
+  const { productId, warehouseId } = stock;
   if (
     !mongoose.Types.ObjectId.isValid(productId) ||
     !mongoose.Types.ObjectId.isValid(warehouseId)
@@ -328,7 +347,7 @@ const createStocksInSession = async ({
       };
 };
 
-const convertDuplicateError = (error, single) => {
+const throwStockBoundaryError = (error, { single, session }) => {
   if (error instanceof DomainError) throw error;
 
   if (error.code === 11000) {
@@ -342,7 +361,14 @@ const convertDuplicateError = (error, single) => {
     );
   }
 
-  throw error;
+  const normalized = normalizeServiceError(error, {
+    safeMessage: single
+      ? "Could not create stock record"
+      : "Could not create stock records",
+    validationPaths: STOCK_VALIDATION_PATHS,
+  });
+  if (session && normalized.code === errorCodes.INTERNAL_ERROR) throw error;
+  throw normalized;
 };
 
 const createStock = async ({
@@ -363,7 +389,7 @@ const createStock = async ({
       });
     return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
-    return convertDuplicateError(error, true);
+    return throwStockBoundaryError(error, { single: true, session });
   }
 };
 
@@ -372,6 +398,16 @@ const createStocksBulk = async ({
   session,
   eventCollector,
 }) => {
+  if (
+    !Array.isArray(stocksToCreate) ||
+    stocksToCreate.length < 1 ||
+    stocksToCreate.length > MAX_BULK_ITEMS
+  ) {
+    throw validationError(
+      "stocks",
+      `Stocks must contain between 1 and ${MAX_BULK_ITEMS} items`
+    );
+  }
   for (const stock of stocksToCreate) assertStockIds(stock);
 
   const combinations = stocksToCreate.map(
@@ -381,7 +417,7 @@ const createStocksBulk = async ({
 
   if (new Set(combinations).size !== combinations.length) {
     throw createDomainError(
-      errorCodes.DUPLICATE_RESOURCE,
+      errorCodes.VALIDATION_FAILED,
       400,
       "Duplicate product and warehouse combinations are not allowed"
     );
@@ -397,7 +433,7 @@ const createStocksBulk = async ({
       });
     return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
-    return convertDuplicateError(error, false);
+    return throwStockBoundaryError(error, { single: false, session });
   }
 };
 

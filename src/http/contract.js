@@ -17,6 +17,7 @@ const ERROR_TITLES = Object.freeze({
   [errorCodes.RESOURCE_NOT_FOUND]: "Resource not found",
   [errorCodes.DUPLICATE_RESOURCE]: "Duplicate resource",
   [errorCodes.INSUFFICIENT_STOCK]: "Insufficient stock",
+  [errorCodes.INVALID_RESOURCE_STATE]: "Invalid resource state",
   [errorCodes.INACTIVE_PRODUCT]: "Inactive product",
   [errorCodes.INACTIVE_WAREHOUSE]: "Inactive warehouse",
   [errorCodes.INACTIVE_STOCK]: "Inactive stock",

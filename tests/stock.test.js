@@ -115,7 +115,31 @@ describe("Stock API", () => {
       .send([stockRecord, stockRecord]);
 
     expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      message: "Duplicate product and warehouse combinations are not allowed",
+    });
     expect(await Stock.countDocuments()).toBe(0);
+  });
+
+  it("uses the corrected v1 code for duplicate combinations in one bulk command", async () => {
+    const managerToken = await createManagerToken();
+    const { product, warehouse } = await createProductAndWarehouse();
+    const stockRecord = {
+      productId: product._id.toString(),
+      warehouseId: warehouse._id.toString(),
+    };
+
+    const response = await request(app)
+      .post("/api/v1/stocks/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([stockRecord, stockRecord]);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      title: "Validation failed",
+      code: "VALIDATION_FAILED",
+      detail: "Duplicate product and warehouse combinations are not allowed",
+    });
   });
 
   it("rejects existing combinations in bulk create", async () => {
@@ -134,6 +158,32 @@ describe("Stock API", () => {
       ]);
 
     expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      message: "One or more stock records already exist",
+    });
+  });
+
+  it("preserves DUPLICATE_RESOURCE for a persisted Stock collision in v1", async () => {
+    const managerToken = await createManagerToken();
+    const { product, warehouse } = await createProductAndWarehouse();
+    await Stock.create({ productId: product._id, warehouseId: warehouse._id });
+
+    const response = await request(app)
+      .post("/api/v1/stocks/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        {
+          productId: product._id.toString(),
+          warehouseId: warehouse._id.toString(),
+        },
+      ]);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      title: "Duplicate resource",
+      code: "DUPLICATE_RESOURCE",
+      detail: "One or more stock records already exist",
+    });
   });
 
   it("rejects inactive products in bulk create", async () => {

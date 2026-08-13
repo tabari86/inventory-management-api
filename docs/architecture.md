@@ -194,6 +194,53 @@ shapes. Legacy lists are the deliberate exception to previously unbounded
 behavior: they return at most 50 records by default (100 maximum) and place a
 continuation token in `X-Next-Cursor`.
 
+Exported Product, Warehouse, Stock, Inventory, and User application-service
+boundaries validate caller commands independently of Express. Recognized
+caller-invalid input becomes non-retryable `VALIDATION_FAILED`/400 with at most
+20 static `{field,message}` details; unknown Mongoose paths or validator kinds,
+residual casts, and unexpected persistence failures become non-retryable
+`INTERNAL_ERROR`/500 with an operation-safe message. The original exception is
+retained only as native `cause` for internal diagnostics and is not copied into
+the public contract.
+
+Self-owned service transactions normalize only after `withTransaction` has
+finished retry/abort handling. A service called with a caller-owned session
+leaves unknown driver errors and their labels unchanged for the outer
+transaction owner. The idempotency executor applies final normalization only
+after its acquisition and outer transaction flow has completed; retry policy is
+therefore unchanged.
+
+The mutation/idempotency/audit/outbox boundary now consumes one strict,
+transport-neutral application-context value. Its complete shape contains only
+`requestId`, `correlationId`, `causationId`, `source`, and an actor with only
+`type` and `id`. All four identity strings are 1-128 characters and match
+`^[A-Za-z0-9._:-]+$`; `causationId` must equal `requestId`. Exactly two pairs are
+valid: `http-api/user` and `internal/service`. Cross-pairs, arbitrary values,
+extra metadata, inherited fields, accessors, and non-plain objects are rejected.
+
+HTTP middleware behavior is unchanged: it still creates the partial pre-auth
+context with `source=http-api`, authentication adds a `user` actor, and request
+and correlation response headers retain their existing fallback behavior. A
+plain non-HTTP caller may now supply `internal/service` to the existing safe
+orchestration. AuditEvent, OutboxEvent, and IdempotencyRecord accept and persist
+that approved context without adding fields; existing `http-api/user` documents
+remain valid. Idempotency uniqueness remains actor type, actor ID, operation ID,
+and key hash—source is not part of the scope. No index, TTL, document shape, or
+migration changes are required.
+
+This is only a value-contract foundation. It does not implement a worker,
+scheduler, event consumer, webhook delivery, n8n workflow, queue integration,
+service authentication, or another transport, and it does not imply Phase 1 or
+production-readiness completion.
+
+Two v1 negative machine codes are intentionally more precise while legacy
+status/message presentation remains compatible. A duplicate Stock combination
+inside one submitted bulk command is `VALIDATION_FAILED`/400, while a collision
+with persisted Stock remains `DUPLICATE_RESOURCE`/409. Archiving an active
+Product is `INVALID_RESOURCE_STATE`/409 with detail `Active products must be
+deactivated before deletion`; genuine inactive-Product restrictions continue
+to use `INACTIVE_PRODUCT`.
+
 Idempotency records continue storing the contract-neutral legacy-shaped public
 result. The presenter applies the requested envelope only after original
 execution or replay resolution. Because both aliases share stable business

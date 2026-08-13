@@ -1,18 +1,19 @@
 const { randomUUID } = require("crypto");
 
 const getSingleHeader = require("../utils/singleHeader");
+const {
+  CONTEXT_ID_PATTERN,
+  CONTEXT_SOURCES,
+  MAX_CONTEXT_ID_LENGTH,
+  isValidContextId: isValidApplicationContextId,
+} = require("../utils/applicationContext");
 
-const CONTEXT_SOURCE = "http-api";
-const CONTEXT_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
-const MAX_CONTEXT_ID_LENGTH = 128;
+const CONTEXT_SOURCE = CONTEXT_SOURCES.HTTP_API;
 
 const isValidContextId = (header) =>
   header.validCardinality &&
-  typeof header.value === "string" &&
-  header.value.length >= 1 &&
-  header.value.length <= MAX_CONTEXT_ID_LENGTH &&
-  !header.value.includes(",") &&
-  CONTEXT_ID_PATTERN.test(header.value);
+  isValidApplicationContextId(header.value) &&
+  !header.value.includes(",");
 
 const requestContext = (req, res, next) => {
   const requestHeader = getSingleHeader(req, "x-request-id");

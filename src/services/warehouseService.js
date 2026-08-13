@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
+const normalizeServiceError = require("../errors/normalizeServiceError");
 const Stock = require("../models/Stock");
 const Warehouse = require("../models/Warehouse");
 const withTransaction = require("../utils/transaction");
@@ -11,10 +12,166 @@ const {
 } = require("./eventSnapshots");
 
 const WAREHOUSE_FIELDS = ["name", "description", "status"];
+const WAREHOUSE_STATUSES = new Set(["active", "inactive"]);
+const MAX_BULK_ITEMS = 150;
+const WAREHOUSE_VALIDATION_PATHS = Object.freeze({
+  code: Object.freeze({
+    required: "Warehouse code is required",
+    maxlength: "Warehouse code must be at most 64 characters long",
+  }),
+  name: Object.freeze({ required: "Warehouse name is required" }),
+  description: Object.freeze({
+    maxlength: "Description must be at most 500 characters long",
+  }),
+  status: Object.freeze({ enum: "Invalid warehouse status" }),
+  deactivationReason: Object.freeze({
+    maxlength: "Deactivation reason must be at most 500 characters long",
+  }),
+});
 const normalizeId = (id) => String(id).toLowerCase();
 
-const createDomainError = (code, httpStatus, message) =>
-  new DomainError({ code, httpStatus, message });
+const createDomainError = (code, httpStatus, message, cause) =>
+  new DomainError({ code, httpStatus, message, cause });
+
+const validationError = (field, message) =>
+  new DomainError({
+    code: errorCodes.VALIDATION_FAILED,
+    httpStatus: 400,
+    message,
+    retryable: false,
+    errors: [{ field, message }],
+  });
+
+const assertCommandObject = (value, field, message) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw validationError(field, message);
+  }
+};
+
+const assertRequiredText = (
+  value,
+  { field, requiredMessage, max, maxMessage, patternMessage, pattern }
+) => {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw validationError(field, requiredMessage);
+  }
+  const normalized = value.trim();
+  if (normalized.length > max) throw validationError(field, maxMessage);
+  if (pattern && !pattern.test(normalized.toUpperCase())) {
+    throw validationError(field, patternMessage);
+  }
+};
+
+const assertOptionalText = (value, { field, label, max }) => {
+  if (value === undefined) return;
+  if (typeof value !== "string") {
+    throw validationError(field, `${label} must be a string`);
+  }
+  if (value.trim().length > max) {
+    throw validationError(
+      field,
+      `${label} must be at most ${max} characters long`
+    );
+  }
+};
+
+const assertWarehouseCreateCommand = (warehouse) => {
+  assertCommandObject(
+    warehouse,
+    "request",
+    "Warehouse command must be an object"
+  );
+  assertRequiredText(warehouse.code, {
+    field: "code",
+    requiredMessage: "Warehouse code is required",
+    max: 64,
+    maxMessage: "Warehouse code must be at most 64 characters long",
+    pattern: /^[A-Z0-9_-]+$/,
+    patternMessage:
+      "Warehouse code may only contain uppercase letters, numbers, dashes and underscores",
+  });
+  assertRequiredText(warehouse.name, {
+    field: "name",
+    requiredMessage: "Warehouse name is required",
+    max: 120,
+    maxMessage: "Warehouse name must be at most 120 characters long",
+  });
+  assertOptionalText(warehouse.description, {
+    field: "description",
+    label: "Description",
+    max: 500,
+  });
+  if (
+    warehouse.status !== undefined &&
+    !WAREHOUSE_STATUSES.has(warehouse.status)
+  ) {
+    throw validationError("status", "Invalid warehouse status");
+  }
+};
+
+const assertWarehouseUpdateCommand = (update) => {
+  assertCommandObject(update, "update", "Warehouse update must be an object");
+  if (!WAREHOUSE_FIELDS.some((field) => update[field] !== undefined)) {
+    throw validationError(
+      "update",
+      "At least one updatable warehouse field is required"
+    );
+  }
+  if (update.name !== undefined) {
+    assertRequiredText(update.name, {
+      field: "name",
+      requiredMessage: "Warehouse name cannot be empty",
+      max: 120,
+      maxMessage: "Warehouse name must be at most 120 characters long",
+    });
+  }
+  assertOptionalText(update.description, {
+    field: "description",
+    label: "Description",
+    max: 500,
+  });
+  assertOptionalText(update.deactivationReason, {
+    field: "deactivationReason",
+    label: "Deactivation reason",
+    max: 500,
+  });
+  if (update.status !== undefined && !WAREHOUSE_STATUSES.has(update.status)) {
+    throw validationError("status", "Invalid warehouse status");
+  }
+};
+
+const assertBulkArray = (items, field, label) => {
+  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_BULK_ITEMS) {
+    throw validationError(
+      field,
+      `${label} must contain between 1 and ${MAX_BULK_ITEMS} items`
+    );
+  }
+};
+
+const throwWarehouseBoundaryError = (
+  error,
+  { bulk = false, session, safeMessage }
+) => {
+  if (error instanceof DomainError) throw error;
+  if (error?.code === 11000) {
+    throw createDomainError(
+      errorCodes.DUPLICATE_RESOURCE,
+      409,
+      bulk
+        ? "One or more warehouse codes already exist"
+        : "A warehouse with this code already exists",
+      error
+    );
+  }
+
+  const normalized = normalizeServiceError(error, {
+    safeMessage,
+    validationPaths: WAREHOUSE_VALIDATION_PATHS,
+  });
+  if (session && normalized.code === errorCodes.INTERNAL_ERROR) throw error;
+  throw normalized;
+};
 
 const assertObjectId = (id, message = "Invalid warehouse ID") => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -335,57 +492,47 @@ const updateWarehouseInSession = async ({
   return updatedWarehouse;
 };
 
-const createWarehouse = async ({
-  code,
-  name,
-  description,
-  status,
-  session,
-  eventCollector,
-}) => {
+const createWarehouse = async (command = {}) => {
+  assertWarehouseCreateCommand(command);
+  const { code, name, description, status, session, eventCollector } = command;
   const normalizedCode = code.toUpperCase();
-  const existingWarehouseQuery = Warehouse.findOne({ code: normalizedCode });
-  if (session) existingWarehouseQuery.session(session);
-  const existingWarehouse = await existingWarehouseQuery;
-
-  if (existingWarehouse) {
-    throw createDomainError(
-      errorCodes.DUPLICATE_RESOURCE,
-      409,
-      "A warehouse with this code already exists"
-    );
-  }
-
-  const warehouseData = {
-    code: normalizedCode,
-    name,
-    description,
-    status,
-  };
 
   try {
-    if (!session) return await Warehouse.create(warehouseData);
-    const [warehouse] = await Warehouse.create([warehouseData], { session });
-    recordWarehouseTransition({ eventCollector, afterWarehouse: warehouse });
-    return warehouse;
-  } catch (error) {
-    if (error instanceof DomainError) throw error;
-    if (error.code === 11000) {
+    const existingWarehouseQuery = Warehouse.findOne({ code: normalizedCode });
+    if (session) existingWarehouseQuery.session(session);
+    const existingWarehouse = await existingWarehouseQuery;
+
+    if (existingWarehouse) {
       throw createDomainError(
         errorCodes.DUPLICATE_RESOURCE,
         409,
         "A warehouse with this code already exists"
       );
     }
-    throw error;
+
+    const warehouseData = {
+      code: normalizedCode,
+      name,
+      description,
+      status,
+    };
+
+    if (!session) return await Warehouse.create(warehouseData);
+    const [warehouse] = await Warehouse.create([warehouseData], { session });
+    recordWarehouseTransition({ eventCollector, afterWarehouse: warehouse });
+    return warehouse;
+  } catch (error) {
+    return throwWarehouseBoundaryError(error, {
+      session,
+      safeMessage: "Could not create warehouse",
+    });
   }
 };
 
-const createWarehousesBulk = async ({
-  warehouses: input,
-  session,
-  eventCollector,
-}) => {
+const createWarehousesBulk = async (command = {}) => {
+  const { warehouses: input, session, eventCollector } = command;
+  assertBulkArray(input, "warehouses", "Warehouses");
+  input.forEach(assertWarehouseCreateCommand);
   const warehousesToCreate = input.map((warehouse) => ({
     ...warehouse,
     code: warehouse.code.toUpperCase(),
@@ -400,19 +547,19 @@ const createWarehousesBulk = async ({
     );
   }
 
-  const existingWarehouseQuery = Warehouse.findOne({ code: { $in: codes } });
-  if (session) existingWarehouseQuery.session(session);
-  const existingWarehouse = await existingWarehouseQuery;
-
-  if (existingWarehouse) {
-    throw createDomainError(
-      errorCodes.DUPLICATE_RESOURCE,
-      409,
-      "One or more warehouse codes already exist"
-    );
-  }
-
   try {
+    const existingWarehouseQuery = Warehouse.findOne({ code: { $in: codes } });
+    if (session) existingWarehouseQuery.session(session);
+    const existingWarehouse = await existingWarehouseQuery;
+
+    if (existingWarehouse) {
+      throw createDomainError(
+        errorCodes.DUPLICATE_RESOURCE,
+        409,
+        "One or more warehouse codes already exist"
+      );
+    }
+
     const warehouses = await Warehouse.insertMany(
       warehousesToCreate,
       session ? { session } : undefined
@@ -429,15 +576,11 @@ const createWarehousesBulk = async ({
       warehouses,
     };
   } catch (error) {
-    if (error instanceof DomainError) throw error;
-    if (error.code === 11000) {
-      throw createDomainError(
-        errorCodes.DUPLICATE_RESOURCE,
-        409,
-        "One or more warehouse codes already exist"
-      );
-    }
-    throw error;
+    return throwWarehouseBoundaryError(error, {
+      bulk: true,
+      session,
+      safeMessage: "Could not create warehouses",
+    });
   }
 };
 
@@ -449,6 +592,8 @@ const updateWarehouse = async ({
   eventCollector,
 }) => {
   assertObjectId(warehouseId);
+  assertWarehouseUpdateCommand(update);
+  assertExpectedVersion(update.expectedVersion);
 
   const execute = async (currentSession) => {
     const warehouse = await Warehouse.findById(warehouseId).session(
@@ -472,7 +617,14 @@ const updateWarehouse = async ({
     });
   };
 
-  return session ? execute(session) : withTransaction(execute);
+  try {
+    return await (session ? execute(session) : withTransaction(execute));
+  } catch (error) {
+    return throwWarehouseBoundaryError(error, {
+      session,
+      safeMessage: "Could not update warehouse",
+    });
+  }
 };
 
 const updateWarehousesBulk = async ({
@@ -481,6 +633,8 @@ const updateWarehousesBulk = async ({
   session,
   eventCollector,
 }) => {
+  assertBulkArray(updates, "updates", "Warehouse updates");
+  updates.forEach(assertWarehouseUpdateCommand);
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -530,7 +684,15 @@ const updateWarehousesBulk = async ({
     };
   };
 
-  return session ? execute(session) : withTransaction(execute);
+  try {
+    return await (session ? execute(session) : withTransaction(execute));
+  } catch (error) {
+    return throwWarehouseBoundaryError(error, {
+      bulk: true,
+      session,
+      safeMessage: "Could not update warehouses",
+    });
+  }
 };
 
 const deactivateWarehouse = ({

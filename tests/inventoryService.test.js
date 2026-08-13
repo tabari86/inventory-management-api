@@ -96,12 +96,19 @@ describe("Inventory application service", () => {
     const compensationSpy = jest.spyOn(Stock, "updateOne");
     jest.spyOn(StockMovement, "create").mockRejectedValueOnce(movementError);
 
-    await expect(
-      inventoryService.createGoodsReceipt({
+    const failure = await inventoryService
+      .createGoodsReceipt({
         stockId: stock._id.toString(),
         quantity: 3,
       })
-    ).rejects.toBe(movementError);
+      .catch((error) => error);
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+      retryable: false,
+      cause: movementError,
+    });
 
     expect((await Stock.findById(stock._id)).quantity).toBe(5);
     expect(await StockMovement.countDocuments()).toBe(0);
@@ -114,12 +121,19 @@ describe("Inventory application service", () => {
     const compensationSpy = jest.spyOn(Stock, "updateOne");
     jest.spyOn(StockMovement, "create").mockRejectedValueOnce(movementError);
 
-    await expect(
-      inventoryService.createGoodsIssue({
+    const failure = await inventoryService
+      .createGoodsIssue({
         stockId: stock._id.toString(),
         quantity: 3,
       })
-    ).rejects.toBe(movementError);
+      .catch((error) => error);
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+      retryable: false,
+      cause: movementError,
+    });
 
     expect((await Stock.findById(stock._id)).quantity).toBe(5);
     expect(await StockMovement.countDocuments()).toBe(0);
@@ -320,8 +334,8 @@ describe("Inventory application service", () => {
         throw movementError;
       });
 
-    await expect(
-      inventoryService.createGoodsReceiptsBulk({
+    const failure = await inventoryService
+      .createGoodsReceiptsBulk({
         receipts: [
           {
             stockId: firstStock._id.toString(),
@@ -335,7 +349,14 @@ describe("Inventory application service", () => {
           },
         ],
       })
-    ).rejects.toBe(movementError);
+      .catch((error) => error);
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+      retryable: false,
+      cause: movementError,
+    });
 
     expect((await Stock.findById(firstStock._id)).quantity).toBe(5);
     expect((await Stock.findById(secondStock._id)).quantity).toBe(7);
@@ -353,14 +374,21 @@ describe("Inventory application service", () => {
 
     jest.spyOn(StockMovement, "insertMany").mockRejectedValueOnce(movementError);
 
-    await expect(
-      inventoryService.createGoodsIssuesBulk({
+    const failure = await inventoryService
+      .createGoodsIssuesBulk({
         issues: [
           { stockId: firstStock._id.toString(), quantity: 4 },
           { stockId: secondStock._id.toString(), quantity: 3 },
         ],
       })
-    ).rejects.toBe(movementError);
+      .catch((error) => error);
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+      retryable: false,
+      cause: movementError,
+    });
 
     expect((await Stock.findById(firstStock._id)).quantity).toBe(10);
     expect((await Stock.findById(secondStock._id)).quantity).toBe(8);

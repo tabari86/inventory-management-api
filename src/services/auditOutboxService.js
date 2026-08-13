@@ -9,6 +9,7 @@ const { getEventDefinition } = require("./domainEventRegistry");
 const { snapshotBuilders } = require("./eventSnapshots");
 const { sha256 } = require("../utils/idempotencyHash");
 const { serializeBoundedJson } = require("../utils/boundedJson");
+const { assertApplicationContext } = require("../utils/applicationContext");
 
 const {
   AUDIT_SCHEMA_VERSION,
@@ -32,24 +33,10 @@ const invalid = (message, cause) =>
   });
 
 const validateContext = ({ context, operationId, idempotency, session }) => {
-  if (
-    !context ||
-    context.actor?.type !== "user" ||
-    typeof context.actor.id !== "string" ||
-    !context.actor.id ||
-    context.source !== "http-api" ||
-    typeof context.requestId !== "string" ||
-    !context.requestId ||
-    context.requestId.length > 128 ||
-    typeof context.correlationId !== "string" ||
-    !context.correlationId ||
-    context.correlationId.length > 128 ||
-    typeof context.causationId !== "string" ||
-    !context.causationId ||
-    context.causationId.length > 128 ||
-    context.causationId !== context.requestId
-  ) {
-    throw invalid("Invalid application context for event persistence");
+  try {
+    assertApplicationContext(context);
+  } catch (cause) {
+    throw invalid("Invalid application context for event persistence", cause);
   }
   if (!operationIds.has(operationId)) {
     throw invalid("Invalid Inventory operation ID for event persistence");

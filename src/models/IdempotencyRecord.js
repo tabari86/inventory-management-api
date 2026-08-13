@@ -1,6 +1,12 @@
 const mongoose = require("mongoose");
 
 const { REQUEST_HASH_VERSION } = require("../utils/canonicalJson");
+const {
+  ACTOR_TYPES,
+  CONTEXT_ID_PATTERN,
+  CONTEXT_SOURCES,
+  isSupportedContextPair,
+} = require("../utils/applicationContext");
 
 const IDEMPOTENCY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_IDEMPOTENCY_RESPONSE_BYTES = 1024 * 1024;
@@ -13,13 +19,15 @@ const idempotencyRecordSchema = new mongoose.Schema(
     actorType: {
       type: String,
       required: true,
-      enum: ["user", "service"],
+      enum: Object.values(ACTOR_TYPES),
       maxlength: 16,
     },
     actorId: {
       type: String,
       required: true,
+      minlength: 1,
       maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
     },
     operationId: {
       type: String,
@@ -50,17 +58,21 @@ const idempotencyRecordSchema = new mongoose.Schema(
     originalRequestId: {
       type: String,
       required: true,
+      minlength: 1,
       maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
     },
     originalCorrelationId: {
       type: String,
       required: true,
+      minlength: 1,
       maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
     },
     source: {
       type: String,
       required: true,
-      enum: ["http-api"],
+      enum: Object.values(CONTEXT_SOURCES),
       maxlength: 32,
     },
     statusCode: {
@@ -87,6 +99,10 @@ const idempotencyRecordSchema = new mongoose.Schema(
 );
 
 idempotencyRecordSchema.pre("validate", function validateCompletedRecord() {
+  if (!isSupportedContextPair(this.source, this.actorType)) {
+    this.invalidate("source", "Unsupported application context pair");
+  }
+
   if (this.state === "processing") {
     const session = this.$session();
     if (!session || !session.inTransaction()) {

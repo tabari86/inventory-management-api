@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
+const normalizeServiceError = require("../errors/normalizeServiceError");
 const Product = require("../models/Product");
 const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
@@ -9,10 +10,49 @@ const Warehouse = require("../models/Warehouse");
 const withTransaction = require("../utils/transaction");
 const { buildStockSnapshot } = require("./eventSnapshots");
 
-const createDomainError = (code, httpStatus, message) =>
-  new DomainError({ code, httpStatus, message });
+const createDomainError = (code, httpStatus, message, cause) =>
+  new DomainError({ code, httpStatus, message, cause });
 
-const validateSingleInventoryInput = ({ stockId, quantity }) => {
+const MAX_BULK_ITEMS = 150;
+const INVENTORY_VALIDATION_PATHS = Object.freeze({
+  stockId: Object.freeze({ required: "Stock ID is required" }),
+  type: Object.freeze({
+    required: "Movement type is required",
+    enum: "Invalid movement type",
+  }),
+  quantity: Object.freeze({
+    required: "Quantity is required",
+    min: "Quantity must be greater than 0",
+  }),
+});
+
+const validationError = (field, message) =>
+  new DomainError({
+    code: errorCodes.VALIDATION_FAILED,
+    httpStatus: 400,
+    message,
+    retryable: false,
+    errors: [{ field, message }],
+  });
+
+const assertOptionalText = (value, { field, label, max }) => {
+  if (value === undefined) return;
+  if (typeof value !== "string") {
+    throw validationError(field, `${label} must be a string`);
+  }
+  if (value.trim().length > max) {
+    throw validationError(
+      field,
+      `${label} must be at most ${max} characters long`
+    );
+  }
+};
+
+const validateSingleInventoryInput = (item) => {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw validationError("item", "Inventory item must be an object");
+  }
+  const { stockId, quantity, reference, reason } = item;
   if (!mongoose.Types.ObjectId.isValid(stockId)) {
     throw createDomainError(
       errorCodes.VALIDATION_FAILED,
@@ -21,13 +61,29 @@ const validateSingleInventoryInput = ({ stockId, quantity }) => {
     );
   }
 
-  if (!quantity || quantity <= 0) {
+  if (!Number.isInteger(quantity) || quantity <= 0) {
     throw createDomainError(
       errorCodes.VALIDATION_FAILED,
       400,
-      "Quantity must be greater than 0"
+      "Quantity must be a positive integer"
     );
   }
+
+  assertOptionalText(reference, {
+    field: "reference",
+    label: "Reference",
+    max: 100,
+  });
+  assertOptionalText(reason, { field: "reason", label: "Reason", max: 500 });
+};
+
+const throwInventoryBoundaryError = (error, { session, safeMessage }) => {
+  const normalized = normalizeServiceError(error, {
+    safeMessage,
+    validationPaths: INVENTORY_VALIDATION_PATHS,
+  });
+  if (session && normalized.code === errorCodes.INTERNAL_ERROR) throw error;
+  throw normalized;
 };
 
 const getOperationMessages = ({ type, bulk = false }) => {
@@ -327,7 +383,7 @@ const createGoodsReceipt = async ({
   session,
   eventCollector,
 }) => {
-  validateSingleInventoryInput({ stockId, quantity });
+  validateSingleInventoryInput({ stockId, quantity, reference, reason });
 
   const execute = (currentSession) =>
     createGoodsReceiptInSession({
@@ -338,7 +394,14 @@ const createGoodsReceipt = async ({
       session: currentSession,
       eventCollector,
     });
-  return session ? execute(session) : withTransaction(execute);
+  try {
+    return await (session ? execute(session) : withTransaction(execute));
+  } catch (error) {
+    return throwInventoryBoundaryError(error, {
+      session,
+      safeMessage: "Could not complete goods receipt",
+    });
+  }
 };
 
 const createGoodsIssueInSession = async ({
@@ -414,7 +477,7 @@ const createGoodsIssue = async ({
   session,
   eventCollector,
 }) => {
-  validateSingleInventoryInput({ stockId, quantity });
+  validateSingleInventoryInput({ stockId, quantity, reference, reason });
 
   const execute = (currentSession) =>
     createGoodsIssueInSession({
@@ -425,7 +488,14 @@ const createGoodsIssue = async ({
       session: currentSession,
       eventCollector,
     });
-  return session ? execute(session) : withTransaction(execute);
+  try {
+    return await (session ? execute(session) : withTransaction(execute));
+  } catch (error) {
+    return throwInventoryBoundaryError(error, {
+      session,
+      safeMessage: "Could not complete goods issue",
+    });
+  }
 };
 
 const createBulkInventoryMutationInSession = async ({
@@ -558,12 +628,18 @@ const createBulkInventoryMutationInSession = async ({
   };
 };
 
-const createBulkInventoryMutation = ({
+const createBulkInventoryMutation = async ({
   items,
   type,
   session,
   eventCollector,
 }) => {
+  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_BULK_ITEMS) {
+    throw validationError(
+      "items",
+      `Inventory items must contain between 1 and ${MAX_BULK_ITEMS} items`
+    );
+  }
   for (const item of items) validateSingleInventoryInput(item);
 
   const execute = (currentSession) =>
@@ -573,7 +649,17 @@ const createBulkInventoryMutation = ({
       session: currentSession,
       eventCollector,
     });
-  return session ? execute(session) : withTransaction(execute);
+  try {
+    return await (session ? execute(session) : withTransaction(execute));
+  } catch (error) {
+    return throwInventoryBoundaryError(error, {
+      session,
+      safeMessage:
+        type === "GOODS_RECEIPT"
+          ? "Could not complete goods receipts"
+          : "Could not complete goods issues",
+    });
+  }
 };
 
 const createGoodsReceiptsBulk = async ({ receipts, session, eventCollector }) =>

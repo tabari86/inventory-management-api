@@ -127,9 +127,31 @@ describe("AuditEvent model", () => {
   });
 
   it.each([
+    ["user/http-api", { actor: { type: "user", id: "user-1" }, source: "http-api" }],
+    [
+      "service/internal",
+      { actor: { type: "service", id: "inventory-maintenance" }, source: "internal" },
+    ],
+  ])("accepts the supported %s actor/source pair", async (_label, override) => {
+    await expect(new AuditEvent(buildRecord(override)).validate()).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ["user/internal", { actor: { type: "user", id: "user-1" }, source: "internal" }],
+    [
+      "service/http-api",
+      { actor: { type: "service", id: "inventory-maintenance" }, source: "http-api" },
+    ],
+  ])("rejects the unsupported %s actor/source pair", async (_label, override) => {
+    await expect(new AuditEvent(buildRecord(override)).validate()).rejects.toThrow(
+      "Unsupported application context pair"
+    );
+  });
+
+  it.each([
     ["UUID", { auditEventId: "not-a-uuid" }],
     ["schema version", { schemaVersion: 2 }],
-    ["actor type", { actor: { type: "service", id: "actor" } }],
+    ["actor type", { actor: { type: "robot", id: "actor" } }],
     ["actor bound", { actor: { type: "user", id: "x".repeat(129) } }],
     [
       "resource version",
@@ -138,7 +160,7 @@ describe("AuditEvent model", () => {
     ["resource type", { resource: { type: "User", id: "id", aggregateVersion: 1 } }],
     ["outcome", { outcome: "failed" }],
     ["context bound", { correlationId: "x".repeat(129) }],
-    ["HTTP causation", { requestId: "request", causationId: "client" }],
+    ["causation", { requestId: "request", causationId: "client" }],
     ["idempotency hash", { idempotency: { recordId: "id", keyHash: "bad" } }],
     ["occurredAt", { occurredAt: undefined }],
   ])("rejects invalid %s", async (label, override) => {

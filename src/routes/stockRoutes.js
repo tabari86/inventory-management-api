@@ -86,6 +86,8 @@ router.get(
  *               $ref: '#/components/schemas/BulkStocksResponse'
  *       400:
  *         description: Validation failed or duplicate product and warehouse combinations were provided
+ *         x-error-codes:
+ *           - VALIDATION_FAILED
  *       401:
  *         description: Access token is missing or invalid
  *       403:
@@ -94,6 +96,11 @@ router.get(
  *         description: One or more products or warehouses were not found
  *       409:
  *         description: A stock record already exists, a parent is inactive/archived, or a parent version conflicts
+ *         x-error-codes:
+ *           - DUPLICATE_RESOURCE
+ *           - INACTIVE_PRODUCT
+ *           - INACTIVE_WAREHOUSE
+ *           - STALE_VERSION
  *       500:
  *         description: Could not create stock records
  */

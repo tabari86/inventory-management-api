@@ -2,6 +2,8 @@ const request = require("supertest");
 const { randomUUID } = require("crypto");
 
 const app = require("../src/app");
+const DomainError = require("../src/errors/DomainError");
+const errorCodes = require("../src/errors/errorCodes");
 const AuditEvent = require("../src/models/AuditEvent");
 const IdempotencyRecord = require("../src/models/IdempotencyRecord");
 const OutboxEvent = require("../src/models/OutboxEvent");
@@ -272,12 +274,19 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
   });
 
   it("rolls back on Audit insertion failure and response serialization failure", async () => {
+    const auditInsertionError = new Error("Injected audit insertion failure");
     jest
       .spyOn(AuditEvent, "insertMany")
-      .mockRejectedValueOnce(new Error("Injected audit insertion failure"));
-    await expect(executeDirectProductCreate()).rejects.toThrow(
-      "Injected audit insertion failure"
-    );
+      .mockRejectedValueOnce(auditInsertionError);
+    const failure = await executeDirectProductCreate().catch((error) => error);
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+      retryable: false,
+      safeMessage: "Could not complete request",
+      cause: auditInsertionError,
+    });
     expect(await Product.countDocuments()).toBe(0);
     expect(await AuditEvent.countDocuments()).toBe(0);
     expect(await OutboxEvent.countDocuments()).toBe(0);

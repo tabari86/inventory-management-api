@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
+const normalizeServiceError = require("../errors/normalizeServiceError");
 const Product = require("../models/Product");
 const Stock = require("../models/Stock");
 const withTransaction = require("../utils/transaction");
@@ -11,10 +12,159 @@ const {
 } = require("./eventSnapshots");
 
 const PRODUCT_FIELDS = ["sku", "name", "description", "unit", "status"];
+const PRODUCT_UNITS = new Set(["piece", "kg", "liter", "meter"]);
+const PRODUCT_STATUSES = new Set(["active", "inactive"]);
+const MAX_BULK_ITEMS = 150;
+const PRODUCT_VALIDATION_PATHS = Object.freeze({
+  sku: Object.freeze({
+    required: "SKU is required",
+    maxlength: "SKU must be at most 64 characters long",
+  }),
+  name: Object.freeze({ required: "Product name is required" }),
+  description: Object.freeze({
+    maxlength: "Description must be at most 500 characters long",
+  }),
+  unit: Object.freeze({ enum: "Invalid product unit" }),
+  status: Object.freeze({ enum: "Invalid product status" }),
+  deactivationReason: Object.freeze({
+    maxlength: "Deactivation reason must be at most 500 characters long",
+  }),
+  archiveReason: Object.freeze({
+    maxlength: "Archive reason must be at most 500 characters long",
+  }),
+});
 const normalizeId = (id) => String(id).toLowerCase();
 
 const createDomainError = (code, httpStatus, message, cause) =>
   new DomainError({ code, httpStatus, message, cause });
+
+const validationError = (field, message) =>
+  new DomainError({
+    code: errorCodes.VALIDATION_FAILED,
+    httpStatus: 400,
+    message,
+    retryable: false,
+    errors: [{ field, message }],
+  });
+
+const assertCommandObject = (value, field, message) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw validationError(field, message);
+  }
+};
+
+const assertRequiredText = (
+  value,
+  { field, message, max, maxMessage, pattern }
+) => {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw validationError(field, message);
+  }
+
+  const normalized = value.trim();
+  if (normalized.length > max) {
+    throw validationError(field, maxMessage);
+  }
+  if (pattern && !pattern.test(normalized.toUpperCase())) {
+    throw validationError(
+      field,
+      "SKU may only contain uppercase letters, numbers, dashes and underscores"
+    );
+  }
+};
+
+const assertOptionalText = (value, { field, max, label }) => {
+  if (value === undefined) return;
+  if (typeof value !== "string") {
+    throw validationError(field, `${label} must be a string`);
+  }
+  if (value.trim().length > max) {
+    throw validationError(
+      field,
+      `${label} must be at most ${max} characters long`
+    );
+  }
+};
+
+const assertProductCreateCommand = (product) => {
+  assertCommandObject(product, "request", "Product command must be an object");
+  assertRequiredText(product.sku, {
+    field: "sku",
+    message: "SKU is required",
+    max: 64,
+    maxMessage: "SKU must be at most 64 characters long",
+    pattern: /^[A-Z0-9_-]+$/,
+  });
+  assertRequiredText(product.name, {
+    field: "name",
+    message: "Product name is required",
+    max: 120,
+    maxMessage: "Product name must be at most 120 characters long",
+  });
+  assertOptionalText(product.description, {
+    field: "description",
+    label: "Description",
+    max: 500,
+  });
+  if (product.unit !== undefined && !PRODUCT_UNITS.has(product.unit)) {
+    throw validationError("unit", "Invalid product unit");
+  }
+  if (product.status !== undefined && !PRODUCT_STATUSES.has(product.status)) {
+    throw validationError("status", "Invalid product status");
+  }
+};
+
+const assertProductUpdateCommand = (update) => {
+  assertCommandObject(update, "update", "Product update must be an object");
+  if (!PRODUCT_FIELDS.some((field) => update[field] !== undefined)) {
+    throw validationError(
+      "update",
+      "At least one updatable product field is required"
+    );
+  }
+  if (update.sku !== undefined) {
+    assertRequiredText(update.sku, {
+      field: "sku",
+      message: "SKU cannot be empty",
+      max: 64,
+      maxMessage: "SKU must be at most 64 characters long",
+      pattern: /^[A-Z0-9_-]+$/,
+    });
+  }
+  if (update.name !== undefined) {
+    assertRequiredText(update.name, {
+      field: "name",
+      message: "Product name cannot be empty",
+      max: 120,
+      maxMessage: "Product name must be at most 120 characters long",
+    });
+  }
+  assertOptionalText(update.description, {
+    field: "description",
+    label: "Description",
+    max: 500,
+  });
+  assertOptionalText(update.deactivationReason, {
+    field: "deactivationReason",
+    label: "Deactivation reason",
+    max: 500,
+  });
+  if (update.unit !== undefined && !PRODUCT_UNITS.has(update.unit)) {
+    throw validationError("unit", "Invalid product unit");
+  }
+  if (update.status !== undefined && !PRODUCT_STATUSES.has(update.status)) {
+    throw validationError("status", "Invalid product status");
+  }
+};
+
+const assertBulkArray = (items, field, label) => {
+  if (!Array.isArray(items) || items.length < 1 || items.length > MAX_BULK_ITEMS) {
+    throw validationError(
+      field,
+      `${label} must contain between 1 and ${MAX_BULK_ITEMS} items`
+    );
+  }
+};
 
 const assertObjectId = (id, message = "Invalid product ID") => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -358,7 +508,10 @@ const updateProductInSession = async ({
   return updatedProduct;
 };
 
-const convertDuplicateError = (error, bulk = false) => {
+const throwProductBoundaryError = (
+  error,
+  { bulk = false, session, safeMessage }
+) => {
   if (error instanceof DomainError) throw error;
 
   if (error.code === 11000) {
@@ -372,18 +525,19 @@ const convertDuplicateError = (error, bulk = false) => {
     );
   }
 
-  throw error;
+  const normalized = normalizeServiceError(error, {
+    safeMessage,
+    validationPaths: PRODUCT_VALIDATION_PATHS,
+  });
+  if (session && normalized.code === errorCodes.INTERNAL_ERROR) throw error;
+  throw normalized;
 };
 
-const createProduct = async ({
-  sku,
-  name,
-  description,
-  unit,
-  status,
-  session,
-  eventCollector,
-}) => {
+const createProduct = async (command = {}) => {
+  assertProductCreateCommand(command);
+  const { sku, name, description, unit, status, session, eventCollector } =
+    command;
+
   try {
     const existingProductQuery = Product.findOne({ sku });
     if (session) existingProductQuery.session(session);
@@ -404,15 +558,17 @@ const createProduct = async ({
     recordProductTransition({ eventCollector, afterProduct: product });
     return product;
   } catch (error) {
-    return convertDuplicateError(error);
+    return throwProductBoundaryError(error, {
+      session,
+      safeMessage: "Could not create product",
+    });
   }
 };
 
-const createProductsBulk = async ({
-  products: productsToCreate,
-  session,
-  eventCollector,
-}) => {
+const createProductsBulk = async (command = {}) => {
+  const { products: productsToCreate, session, eventCollector } = command;
+  assertBulkArray(productsToCreate, "products", "Products");
+  productsToCreate.forEach(assertProductCreateCommand);
   const skus = productsToCreate.map((product) => product.sku);
 
   if (new Set(skus).size !== skus.length) {
@@ -452,7 +608,11 @@ const createProductsBulk = async ({
       products,
     };
   } catch (error) {
-    return convertDuplicateError(error, true);
+    return throwProductBoundaryError(error, {
+      bulk: true,
+      session,
+      safeMessage: "Could not create products",
+    });
   }
 };
 
@@ -464,6 +624,8 @@ const updateProduct = async ({
   eventCollector,
 }) => {
   assertObjectId(productId);
+  assertProductUpdateCommand(update);
+  assertExpectedVersion(update.expectedVersion);
 
   try {
     const execute = async (currentSession) => {
@@ -491,7 +653,10 @@ const updateProduct = async ({
 
     return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
-    return convertDuplicateError(error);
+    return throwProductBoundaryError(error, {
+      session,
+      safeMessage: "Could not update product",
+    });
   }
 };
 
@@ -501,6 +666,8 @@ const updateProductsBulk = async ({
   session,
   eventCollector,
 }) => {
+  assertBulkArray(updates, "updates", "Product updates");
+  updates.forEach(assertProductUpdateCommand);
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -598,7 +765,11 @@ const updateProductsBulk = async ({
 
     return await (session ? execute(session) : withTransaction(execute));
   } catch (error) {
-    return convertDuplicateError(error, true);
+    return throwProductBoundaryError(error, {
+      bulk: true,
+      session,
+      safeMessage: "Could not update products",
+    });
   }
 };
 
@@ -628,6 +799,11 @@ const archiveProduct = async ({
 }) => {
   assertObjectId(productId);
   assertExpectedVersion(expectedVersion);
+  assertOptionalText(archiveReason, {
+    field: "archiveReason",
+    label: "Archive reason",
+    max: 500,
+  });
 
   const execute = async (currentSession) => {
     const product = await Product.findById(productId).session(currentSession);
@@ -642,7 +818,7 @@ const archiveProduct = async ({
 
     if (product.status === "active") {
       throw createDomainError(
-        errorCodes.INACTIVE_PRODUCT,
+        errorCodes.INVALID_RESOURCE_STATE,
         409,
         "Active products must be deactivated before deletion"
       );
@@ -686,7 +862,14 @@ const archiveProduct = async ({
     return archivedProduct;
   };
 
-  return session ? execute(session) : withTransaction(execute);
+  try {
+    return await (session ? execute(session) : withTransaction(execute));
+  } catch (error) {
+    return throwProductBoundaryError(error, {
+      session,
+      safeMessage: "Could not archive product",
+    });
+  }
 };
 
 const archiveProductsBulk = async ({
@@ -696,6 +879,12 @@ const archiveProductsBulk = async ({
   session,
   eventCollector,
 }) => {
+  assertBulkArray(ids, "ids", "Product IDs");
+  assertOptionalText(archiveReason, {
+    field: "archiveReason",
+    label: "Archive reason",
+    max: 500,
+  });
   ids.forEach((id) => assertObjectId(id));
   const normalizedIds = ids.map(normalizeId);
 
@@ -725,7 +914,7 @@ const archiveProductsBulk = async ({
 
     if (products.some((product) => product.status === "active")) {
       throw createDomainError(
-        errorCodes.INACTIVE_PRODUCT,
+        errorCodes.INVALID_RESOURCE_STATE,
         409,
         "Active products must be deactivated before deletion"
       );
@@ -778,7 +967,15 @@ const archiveProductsBulk = async ({
     return { deletedCount: normalizedIds.length };
   };
 
-  return session ? execute(session) : withTransaction(execute);
+  try {
+    return await (session ? execute(session) : withTransaction(execute));
+  } catch (error) {
+    return throwProductBoundaryError(error, {
+      bulk: true,
+      session,
+      safeMessage: "Could not archive products",
+    });
+  }
 };
 
 module.exports = {

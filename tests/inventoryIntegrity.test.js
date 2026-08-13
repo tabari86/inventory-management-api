@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const request = require("supertest");
 
 const app = require("../src/app");
+const DomainError = require("../src/errors/DomainError");
+const errorCodes = require("../src/errors/errorCodes");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
 const StockMovement = require("../src/models/StockMovement");
@@ -150,12 +152,19 @@ describe("Inventory lifecycle enforcement and movement history", () => {
     const movementError = new Error("simulated movement failure");
     jest.spyOn(StockMovement, "create").mockRejectedValueOnce(movementError);
 
-    await expect(
-      inventoryService.createGoodsReceipt({
+    const failure = await inventoryService
+      .createGoodsReceipt({
         stockId: stock._id.toString(),
         quantity: 5,
       })
-    ).rejects.toBe(movementError);
+      .catch((error) => error);
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+      retryable: false,
+      cause: movementError,
+    });
 
     expect(await Stock.findById(stock._id)).toMatchObject({
       quantity: 10,

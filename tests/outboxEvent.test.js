@@ -85,6 +85,16 @@ describe("OutboxEvent model", () => {
     );
   });
 
+  it.each(["http-api", "internal"])("accepts the approved %s source", async (source) => {
+    await expect(new OutboxEvent(buildRecord({ source })).validate()).resolves.toBeUndefined();
+  });
+
+  it("rejects an arbitrary source", async () => {
+    await expect(
+      new OutboxEvent(buildRecord({ source: "queue" })).validate()
+    ).rejects.toThrow();
+  });
+
   it.each([
     ["UUID", { eventId: "not-a-uuid" }],
     ["event version", { eventVersion: 2 }],
@@ -102,7 +112,7 @@ describe("OutboxEvent model", () => {
       },
     ],
     ["context bound", { requestId: "x".repeat(129) }],
-    ["HTTP causation", { requestId: "request", causationId: "client" }],
+    ["causation", { requestId: "request", causationId: "client" }],
     ["idempotency hash", { idempotency: { recordId: "id", keyHash: "bad" } }],
     [
       "delivery attempts",

@@ -71,18 +71,18 @@ production smoke verification are complete.
 | 5 | Retrying with the same idempotency key does not create another mutation. | PASS | `src/services/idempotencyExecutor.js` stores/replays the completed result; `tests/idempotency.test.js` and `tests/idempotencyExecutor.test.js` verify one mutation across retries. |
 | 6 | Reusing one idempotency key with a different payload produces a stable machine-readable conflict. | PASS | `src/utils/idempotencyHash.js`, `src/errors/errorCodes.js`, and `src/services/idempotencyExecutor.js` implement the stable conflict; `tests/idempotency.test.js` verifies `IDEMPOTENCY_CONFLICT`. |
 | 7 | Concurrent requests with one idempotency key cause only one real execution. | PASS | The keyed claim/completion flow in `src/services/idempotencyExecutor.js` is covered by concurrent-execution cases in `tests/idempotencyExecutor.test.js` and API-level coverage in `tests/idempotency.test.js`. |
-| 8 | Inactive Product or Warehouse state blocks unauthorized mutations. | PASS | Lifecycle guards in `src/services/inventoryService.js` and `src/services/stockService.js` are exercised by `tests/inventoryIntegrity.test.js` and `tests/lifecycleVersion.test.js`. |
+| 8 | Inactive Product or Warehouse state blocks unauthorized mutations. | PASS | Lifecycle guards in `src/services/inventoryService.js` and `src/services/stockService.js` are exercised by `tests/inventoryIntegrity.test.js`, `tests/stockService.test.js`, and `tests/lifecycleVersion.test.js`; genuine inactive-Product restrictions retain `INACTIVE_PRODUCT`, while active-before-archive now uses `INVALID_RESOURCE_STATE`. |
 | 9 | Hard deletion cannot destroy historical relationships. | PASS | `src/services/productService.js` archives Products instead of deleting them, while `src/models/StockMovement.js` retains relationship/snapshot history; `tests/lifecycleVersion.test.js` and `tests/stockMovement.test.js` verify retained history. |
 | 10 | Stale updates on sensitive resources are controlled. | PASS | Explicit versions and `expectedVersion` guards in Product/Warehouse/inventory services are covered by stale-write conflicts in `tests/lifecycleVersion.test.js` and `tests/inventoryIntegrity.test.js`. |
 | 11 | Request ID and correlation ID are traceable through HTTP, logs, transactions, AuditEvent, and OutboxEvent. | PASS | `src/middleware/requestContext.js`, `src/middleware/httpLogger.js`, and `src/services/auditOutboxService.js` propagate the effective IDs; `tests/requestContext.test.js`, `tests/logger.test.js`, and `tests/auditOutbox.test.js` verify the HTTP-to-persistence trail. |
-| 12 | Errors provide a code, HTTP status, retryability, and safe detail. | PASS | `src/errors/DomainError.js`, `src/errors/errorCodes.js`, `src/middleware/errorHandler.js`, and `src/http/contract.js` define the safe error envelope; `tests/errorHandler.test.js` and `tests/apiContract.test.js` verify all four fields and redaction behavior. |
+| 12 | Errors provide a code, HTTP status, retryability, and safe detail. | PASS | `src/errors/normalizeServiceError.js` adds the transport-neutral service boundary: known `DomainError` identity is preserved, recognized caller validation is bounded, unknown failures are non-retryable `INTERNAL_ERROR`, native cause remains internal, and supplied-session driver labels remain visible to the transaction owner. `tests/serviceErrorNormalization.test.js`, `tests/errorHandler.test.js`, and `tests/apiContract.test.js` verify classification and redaction. |
 | 13 | Startup accepts no traffic before database readiness. | PASS | `src/runtime/startup.js` and `src/server.js` connect before listening; `tests/startup.test.js` and `tests/server.test.js` verify ordering and fail-fast behavior. |
 | 14 | Liveness and readiness have independent real behavior. | PASS | `src/runtime/lifecycle.js` and `src/routes/healthRoutes.js` separate process liveness from database-aware readiness; `tests/health.test.js` verifies their independent status transitions. |
 | 15 | Shutdown closes HTTP and MongoDB in a controlled manner. | PASS | `src/runtime/shutdown.js` implements single-flight bounded shutdown; `tests/shutdown.test.js` verifies HTTP close, MongoDB close, timeout, signal, and exit behavior. |
 | 16 | Main list endpoints are bounded and cursor-paginated. | PASS | `src/services/readService.js` and `src/utils/cursorPagination.js` implement bounded `limit + 1` reads; `tests/pagination.test.js` and `tests/apiContract.test.js` verify cursors and maximum page sizes. |
 | 17 | Filters and sort fields are allowlisted. | PASS | Resource query definitions in `src/services/readService.js` and the resource validators use explicit allowlists; `tests/pagination.test.js` verifies rejection of unsupported filters and sort fields. |
 | 18 | Implemented indexes align with query patterns. | PASS | `src/config/apiReadIndexes.js` and `scripts/migrations/phase1ApiReadIndexes.js` map equality filters to cursor sorts; `tests/apiReadIndexMigration.test.js` and the local `npm test` gate verify the definitions/preflight. |
-| 19 | OpenAPI describes actual API behavior. | PASS | `src/config/swagger.js`, `tests/swagger.test.js`, and the local `npm run validate:openapi` gate verify routes, security, errors, idempotency, pagination, and public-content safety against the implemented API. |
+| 19 | OpenAPI describes actual API behavior. | PASS | `src/config/swagger.js`, the focused Stock/Product route annotations, `tests/swagger.test.js`, and the local `npm run validate:openapi` gate verify routes, security, errors, idempotency, pagination, and public-content safety. Stock same-command duplicates document `VALIDATION_FAILED`, persisted collisions document `DUPLICATE_RESOURCE`, and active Product archive documents `INVALID_RESOURCE_STATE`. |
 | 20 | Tests run against MongoDB with replica-set transaction support. | PASS | `tests/setupTestDb.js` uses the MongoDB memory replica set, and the final local `npm test` command exercises the transaction suites against it. |
 | 21 | The previous test suite passes, or an explicit documented migration exists. | PASS | The final local `npm test` gate runs the complete prior and WP8 suite without skips; lifecycle/idempotency/audit/index data changes also have explicit scripts under `scripts/migrations` and the runbook in `docs/production-data-notes.md`. |
 | 22 | Docker and CI remain free of regression. | PASS WITH LIMITATION | `.github/workflows/ci.yml` includes install, audits, security, syntax, Jest, OpenAPI, Compose, image build, and runtime smoke steps; local `docker compose config --quiet` and `npm run verify:docker` pass, but the changed workflow has not yet run on GitHub. |
@@ -95,6 +95,31 @@ Definition of Done totals:
 - PASS: 23
 - PASS WITH LIMITATION: 2
 - BLOCKED: 0
+
+## Verification 1B-B transport-neutral context correction
+
+The reusable mutation/idempotency/audit/outbox boundary accepts exactly two
+complete application-context pairs: `http-api/user` and `internal/service`.
+`src/utils/applicationContext.js` owns the pure value contract and rejects
+non-plain or extra-key objects, arbitrary/cross-paired actor and source values,
+identity strings outside 1-128 characters or `^[A-Za-z0-9._:-]+$`, and any
+`causationId` different from `requestId`. The helper has no Express, middleware,
+controller, HTTP presenter, model, or logger dependency.
+
+HTTP request-context behavior remains unchanged. The existing executor scope is
+still `{actorType, actorId, operationId, keyHash}` and its Batch A final error
+normalization remains outside the transaction/acquisition core. AuditEvent,
+OutboxEvent, and IdempotencyRecord validation now permits the approved internal
+values while preserving existing document fields, indexes, TTL, and historical
+`http-api/user` validity. This enum/validation expansion requires no migration,
+collection validator, `collMod`, or production data rewrite.
+
+Focused real-replica-set coverage proves internal execution, persisted audit
+and outbox context, keyed replay, actor-type scope separation, invalid-context
+rollback, exact pair matrices, HTTP compatibility, and the four accepted Batch
+A corrections. This remains a foundation only: no worker, scheduler, event
+consumer, webhook delivery, n8n workflow, queue integration, or service
+authentication is implemented, and Verification 1/Phase 1 remain open.
 
 ## Deferred scope
 

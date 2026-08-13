@@ -9,6 +9,10 @@ const {
 } = require("../services/domainEventRegistry");
 const { canonicalize } = require("../utils/canonicalJson");
 const { serializeBoundedJson } = require("../utils/boundedJson");
+const {
+  CONTEXT_ID_PATTERN,
+  CONTEXT_SOURCES,
+} = require("../utils/applicationContext");
 
 const OUTBOX_PRODUCER = "inventory-management-api";
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -76,10 +80,25 @@ const outboxEventSchema = new mongoose.Schema(
     producer: immutableString({ enum: [OUTBOX_PRODUCER], maxlength: 64 }),
     aggregate: { type: aggregateSchema, required: true, immutable: true },
     occurredAt: { type: Date, required: true, immutable: true },
-    requestId: immutableString({ minlength: 1, maxlength: 128 }),
-    correlationId: immutableString({ minlength: 1, maxlength: 128 }),
-    causationId: immutableString({ minlength: 1, maxlength: 128 }),
-    source: immutableString({ enum: ["http-api"], maxlength: 32 }),
+    requestId: immutableString({
+      minlength: 1,
+      maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
+    }),
+    correlationId: immutableString({
+      minlength: 1,
+      maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
+    }),
+    causationId: immutableString({
+      minlength: 1,
+      maxlength: 128,
+      match: CONTEXT_ID_PATTERN,
+    }),
+    source: immutableString({
+      enum: Object.values(CONTEXT_SOURCES),
+      maxlength: 32,
+    }),
     idempotency: {
       type: idempotencySchema,
       default: null,
@@ -109,7 +128,7 @@ const outboxEventSchema = new mongoose.Schema(
 
 outboxEventSchema.pre("validate", function validatePayloadContract() {
   if (this.causationId !== this.requestId) {
-    throw new Error("HTTP outbox causation must equal the request ID");
+    throw new Error("Outbox causation must equal the request ID");
   }
   const definition = getEventDefinition(this.eventType);
   if (

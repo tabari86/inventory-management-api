@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 const request = require("supertest");
 
 const app = require("../src/app");
+const DomainError = require("../src/errors/DomainError");
+const errorCodes = require("../src/errors/errorCodes");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
 const StockMovement = require("../src/models/StockMovement");
@@ -351,7 +353,14 @@ describe("Lifecycle and explicit aggregate versions", () => {
           ? productService.deactivateProduct({ productId: product._id })
           : warehouseService.deactivateWarehouse({ warehouseId: warehouse._id });
 
-      await expect(lifecycleMutation).rejects.toBe(propagationError);
+      const failure = await lifecycleMutation.catch((error) => error);
+      expect(failure).toBeInstanceOf(DomainError);
+      expect(failure).toMatchObject({
+        code: errorCodes.INTERNAL_ERROR,
+        httpStatus: 500,
+        retryable: false,
+        cause: propagationError,
+      });
 
       const parent =
         parentType === "Product"

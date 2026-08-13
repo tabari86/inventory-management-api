@@ -1,5 +1,6 @@
 const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
+const normalizeServiceError = require("../errors/normalizeServiceError");
 const IdempotencyRecord = require("../models/IdempotencyRecord");
 const {
   IDEMPOTENCY_RETENTION_MS,
@@ -7,6 +8,7 @@ const {
   MAX_IDEMPOTENCY_RESPONSE_BYTES,
 } = IdempotencyRecord;
 const { hashCanonicalCommand } = require("../utils/canonicalJson");
+const { assertApplicationContext } = require("../utils/applicationContext");
 const withTransaction = require("../utils/transaction");
 const { createDomainEventCollector } = require("./domainEventCollector");
 const { persistAuditOutboxEvents } = require("./auditOutboxService");
@@ -120,7 +122,7 @@ const resolveCompletedRecord = ({ record, requestHash, requestHashVersion }) => 
   };
 };
 
-const executeInventoryMutation = async ({
+const executeInventoryMutationCore = async ({
   context,
   inventoryOperation,
   command,
@@ -138,12 +140,19 @@ const executeInventoryMutation = async ({
     });
   }
 
+  try {
+    assertApplicationContext(context);
+  } catch (cause) {
+    throw new DomainError({
+      code: errorCodes.VALIDATION_FAILED,
+      httpStatus: 500,
+      message: "Invalid idempotency execution context",
+      safeMessage: "Could not complete request",
+      cause,
+    });
+  }
+
   if (
-    context.actor.type !== "user" ||
-    context.source !== "http-api" ||
-    typeof context.requestId !== "string" ||
-    typeof context.correlationId !== "string" ||
-    context.causationId !== context.requestId ||
     inventoryOperation?.operationId !== command?.operationId ||
     (inventoryOperation?.keyHash !== null &&
       !SHA256_PATTERN.test(inventoryOperation?.keyHash))
@@ -303,6 +312,16 @@ const executeInventoryMutation = async ({
   }
 
   throw inProgressError();
+};
+
+const executeInventoryMutation = async (options) => {
+  try {
+    return await executeInventoryMutationCore(options);
+  } catch (error) {
+    throw normalizeServiceError(error, {
+      safeMessage: "Could not complete request",
+    });
+  }
 };
 
 module.exports = {

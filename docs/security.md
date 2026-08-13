@@ -28,6 +28,15 @@ token theft detection remain outside Phase 1.
 - `express-validator` allowlists and normalizes request fields before
   controllers invoke application services. Collection reads reject unknown,
   nested, operator-like, and unsupported query values.
+- Direct application-service callers receive the same bounded caller-command
+  validation. Public service validation emits at most 20 static
+  `{field,message}` details (128-character fields and 160-character messages)
+  and never copies rejected values or raw Mongoose messages. Unknown validation
+  shape is treated as an internal error instead of being downgraded to 400.
+- Unexpected service failures retain the original exception only as native
+  `cause`; public safe messages, HTTP details, structured logs, and validation
+  details exclude that cause. Such failures are non-retryable unless a separate
+  proven policy says otherwise.
 - Helmet supplies security headers and Express does not expose `X-Powered-By`.
 - Login rate limiting is process-local. It protects the current single-instance
   demo topology but is not a distributed rate limit.
@@ -41,6 +50,23 @@ token theft detection remain outside Phase 1.
   explicit aggregate versions, referential checks, and derived Stock lifecycle
   guards. These are application consistency controls, not distributed-system
   guarantees.
+- Unknown driver errors are not wrapped inside caller-owned transaction
+  callbacks. Their MongoDB labels remain available until the outer transaction
+  owner finishes retry and abort handling; only the final application boundary
+  converts an ultimate raw failure to `INTERNAL_ERROR`.
+- Application context is a strict transport-neutral allowlist, not an extension
+  bag. Exactly `http-api/user` and `internal/service` are accepted. Context and
+  actor objects must be plain exact-shape records; extra metadata, inherited or
+  accessor fields, cross-pairs, and arbitrary actor/source strings are rejected.
+  Request, correlation, causation, and actor IDs are 1-128 ASCII allowlisted
+  characters, and causation remains equal to request ID. Service IDs are bounded
+  identifiers, not credentials; tokens, passwords, headers, and caller metadata
+  are not application-context fields.
+- The internal/service value contract reuses the same transactional
+  idempotency/audit/outbox controls without widening public HTTP input. It adds
+  no worker, scheduler, consumer, webhook, n8n, queue, or machine-authentication
+  implementation. Existing HTTP request-context generation and user actors are
+  unchanged.
 
 ## Environment and secret handling
 

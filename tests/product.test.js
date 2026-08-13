@@ -139,6 +139,42 @@ describe("Product API", () => {
     expect(archivedProduct.archivedAt).toEqual(expect.any(Date));
   });
 
+  it("keeps the legacy active Product archive conflict message", async () => {
+    const adminToken = await createAdminToken();
+    const product = await Product.create({
+      sku: "ACTIVE-SINGLE-ARCHIVE",
+      name: "Active Single Archive",
+    });
+
+    const response = await request(app)
+      .delete(`/api/products/${product._id}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      message: "Active products must be deactivated before deletion",
+    });
+  });
+
+  it("uses INVALID_RESOURCE_STATE for an active Product archive in v1", async () => {
+    const adminToken = await createAdminToken();
+    const product = await Product.create({
+      sku: "ACTIVE-SINGLE-ARCHIVE-V1",
+      name: "Active Single Archive V1",
+    });
+
+    const response = await request(app)
+      .delete(`/api/v1/products/${product._id}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      title: "Invalid resource state",
+      code: "INVALID_RESOURCE_STATE",
+      detail: "Active products must be deactivated before deletion",
+    });
+  });
+
   it("bulk creates products for a manager", async () => {
     const managerToken = await createManagerToken();
     const response = await request(app)
@@ -494,7 +530,31 @@ describe("Product API", () => {
       .send({ ids: products.map((product) => product._id.toString()) });
 
     expect(response.statusCode).toBe(409);
+    expect(response.body).toEqual({
+      message: "Active products must be deactivated before deletion",
+    });
     expect(await Product.countDocuments()).toBe(2);
+  });
+
+  it("uses INVALID_RESOURCE_STATE for an active Product in v1 bulk archive", async () => {
+    const adminToken = await createAdminToken();
+    const products = await Product.create([
+      { sku: "ACTIVE-BULK-V1", name: "Active Bulk V1" },
+      { sku: "INACTIVE-BULK-V1", name: "Inactive Bulk V1", status: "inactive" },
+    ]);
+
+    const response = await request(app)
+      .delete("/api/v1/products/bulk")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ ids: products.map((product) => product._id.toString()) });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      title: "Invalid resource state",
+      code: "INVALID_RESOURCE_STATE",
+      detail: "Active products must be deactivated before deletion",
+    });
+    expect(await Product.countDocuments({ archivedAt: { $ne: null } })).toBe(0);
   });
 
   it("bulk deletes inactive products for an admin", async () => {

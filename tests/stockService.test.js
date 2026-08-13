@@ -80,6 +80,47 @@ describe("Stock application service", () => {
     });
   });
 
+  it("uses VALIDATION_FAILED for a duplicate combination in one bulk command", async () => {
+    const [product, warehouse] = await Promise.all([
+      createProduct(),
+      createWarehouse(),
+    ]);
+    const stock = {
+      productId: product._id.toString(),
+      warehouseId: warehouse._id.toString(),
+    };
+
+    await expect(
+      stockService.createStocksBulk({ stocks: [stock, stock] })
+    ).rejects.toMatchObject({
+      code: errorCodes.VALIDATION_FAILED,
+      httpStatus: 400,
+      message: "Duplicate product and warehouse combinations are not allowed",
+    });
+  });
+
+  it("preserves INACTIVE_PRODUCT for a genuine inactive Product restriction", async () => {
+    const [product, warehouse] = await Promise.all([
+      Product.create({
+        sku: "STOCK-SERVICE-INACTIVE",
+        name: "Inactive Stock Service Product",
+        status: "inactive",
+      }),
+      createWarehouse(),
+    ]);
+
+    await expect(
+      stockService.createStock({
+        productId: product._id.toString(),
+        warehouseId: warehouse._id.toString(),
+      })
+    ).rejects.toMatchObject({
+      code: errorCodes.INACTIVE_PRODUCT,
+      httpStatus: 409,
+      message: "Cannot create stock for inactive product",
+    });
+  });
+
   it("bulk creates Stock records with the existing ordered semantics", async () => {
     const products = await Product.create([
       { sku: "STOCK-SERVICE-BULK-001", name: "Bulk Service One" },
