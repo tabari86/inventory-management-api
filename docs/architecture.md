@@ -58,7 +58,9 @@ Products remain visible and referenced, block those mutations, and may be
 reactivated. The deprecated single and bulk DELETE routes archive only inactive
 Products by setting `archivedAt`, `archivedBy`, and optional `archiveReason`.
 Archive retains the document and unique SKU but hides it from normal Product
-reads and updates. There is no restore or physical-delete API.
+reads and updates. Bulk archive accepts ordered `items`, each containing `id` and
+the current `expectedVersion`; the former IDs-only body is rejected. There is no
+restore or physical-delete API.
 
 Meaningful Product commands increment explicit `version` once. Repeated
 already-applied transitions do not increment it. Deactivation metadata is set
@@ -170,9 +172,13 @@ uses MongoDB 8 with the single-node replica set `rs0`.
 
 Explicit `version` on Product, Warehouse, and Stock is the domain aggregate
 revision; Mongoose `__v` is not. Product/Warehouse mutations always use an
-internal compare-and-swap. The current API additionally accepts optional
-`expectedVersion`; omission remains backward compatible and can still permit
-last-write-wins. Mandatory preconditions are deferred to a versioned contract.
+internal compare-and-swap. Product update, deactivate, archive, bulk update, and
+bulk archive, plus Warehouse update, deactivate, and bulk update, require the
+caller's current positive-integer `expectedVersion`. Services enforce the same
+precondition for direct callers. Missing or invalid versions produce
+`VALIDATION_FAILED` (`400` at HTTP); stale versions produce `STALE_VERSION`
+(`409`) before no-op or lifecycle-state evaluation. Bulk services validate every
+item version before the first write. Creates remain unaffected.
 
 Transaction callback state and movement calculations are attempt-local, so a
 driver callback retry does not accumulate versions or response arrays.
@@ -184,6 +190,10 @@ One shared API router is mounted first at `/api/v1` and then at the temporary
 so malformed JSON, authentication, RBAC, validation, rate limiting, route 404s,
 domain failures, and unexpected errors all use the correct presenter. Health,
 readiness, the root route, and Swagger UI are outside this versioned presenter.
+Because both prefixes use the same router, the mandatory version contract is a
+simultaneous breaking rollout on both aliases; it does not introduce API v2.
+There is still no Warehouse archive operation. No database or index migration is
+needed because the existing aggregate version fields are sufficient.
 
 V1 successes are `{data,meta}`. Base metadata always contains the effective
 request/correlation IDs and `schemaVersion: "1.0"`; collection metadata also

@@ -144,15 +144,23 @@ const updateProductsBulk = async (req, res, next) => {
 
 const deleteProductsBulk = async (req, res, next) => {
   try {
-    const ids = req.body.ids;
+    const items = req.body.items.map(({ id, expectedVersion }) => ({
+      id,
+      expectedVersion,
+    }));
     return sendInventoryMutation({
       req,
       res,
       statusCode: 200,
-      command: commandFor(req, { ids: ids.map(normalizeId) }),
+      command: commandFor(req, {
+        items: items.map(({ id, expectedVersion }) => ({
+          id: normalizeId(id),
+          expectedVersion,
+        })),
+      }),
       execute: ({ session, eventCollector }) =>
         productService.archiveProductsBulk({
-          ids,
+          items,
           actorId: req.user.id,
           session,
           eventCollector,

@@ -131,7 +131,8 @@ describe("Product API", () => {
 
     const adminResponse = await request(app)
       .delete(`/api/products/${product._id}`)
-      .set("Authorization", `Bearer ${adminToken}`);
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ expectedVersion: product.version });
     expect(adminResponse.statusCode).toBe(200);
     const archivedProduct = await Product.findById(product._id);
     expect(archivedProduct).not.toBeNull();
@@ -148,7 +149,8 @@ describe("Product API", () => {
 
     const response = await request(app)
       .delete(`/api/products/${product._id}`)
-      .set("Authorization", `Bearer ${adminToken}`);
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ expectedVersion: product.version });
 
     expect(response.statusCode).toBe(409);
     expect(response.body).toEqual({
@@ -165,7 +167,8 @@ describe("Product API", () => {
 
     const response = await request(app)
       .delete(`/api/v1/products/${product._id}`)
-      .set("Authorization", `Bearer ${adminToken}`);
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ expectedVersion: product.version });
 
     expect(response.statusCode).toBe(409);
     expect(response.body).toMatchObject({
@@ -231,8 +234,16 @@ describe("Product API", () => {
       .patch("/api/products/bulk")
       .set("Authorization", `Bearer ${managerToken}`)
       .send([
-        { id: products[0]._id.toString(), name: "Updated One" },
-        { id: products[1]._id.toString(), status: "inactive" },
+        {
+          id: products[0]._id.toString(),
+          name: "Updated One",
+          expectedVersion: products[0].version,
+        },
+        {
+          id: products[1]._id.toString(),
+          status: "inactive",
+          expectedVersion: products[1].version,
+        },
       ]);
 
     expect(response.statusCode).toBe(200);
@@ -265,11 +276,13 @@ describe("Product API", () => {
           id: products[0]._id.toString(),
           sku: "SHARED-TARGET",
           status: "inactive",
+          expectedVersion: products[0].version,
         },
         {
           id: products[1]._id.toString(),
           sku: "SHARED-TARGET",
           name: "Must Not Commit",
+          expectedVersion: products[1].version,
         },
       ]);
 
@@ -304,10 +317,12 @@ describe("Product API", () => {
           id: products[0]._id.toString(),
           sku: products[1].sku,
           status: "inactive",
+          expectedVersion: products[0].version,
         },
         {
           id: products[1]._id.toString(),
           name: "Must Not Commit",
+          expectedVersion: products[1].version,
         },
       ]);
 
@@ -339,6 +354,7 @@ describe("Product API", () => {
           id: selectedProduct._id.toString(),
           sku: unselectedProduct.sku,
           name: "Must Not Commit",
+          expectedVersion: selectedProduct.version,
         },
       ]);
 
@@ -362,11 +378,13 @@ describe("Product API", () => {
           id: products[0]._id.toString(),
           sku: products[1].sku,
           status: "inactive",
+          expectedVersion: products[0].version,
         },
         owner: {
           id: products[1]._id.toString(),
           sku: "MOVE-AWAY-B-NEW",
           name: "Must Not Commit",
+          expectedVersion: products[1].version,
         },
       };
       const before = await captureProductAndStockState();
@@ -397,11 +415,13 @@ describe("Product API", () => {
           id: products[0]._id.toString(),
           sku: products[1].sku,
           status: "inactive",
+          expectedVersion: products[0].version,
         },
         b: {
           id: products[1]._id.toString(),
           sku: products[0].sku,
           name: "Must Not Commit",
+          expectedVersion: products[1].version,
         },
       };
       const before = await captureProductAndStockState();
@@ -433,12 +453,14 @@ describe("Product API", () => {
           id: products[0]._id.toString(),
           sku: "VALID-NOOP-A-NEW",
           name: "Meaningfully Updated",
+          expectedVersion: products[0].version,
         },
         {
           id: products[1]._id.toString(),
           sku: products[1].sku,
           name: products[1].name,
           status: products[1].status,
+          expectedVersion: products[1].version,
         },
       ]);
 
@@ -489,8 +511,16 @@ describe("Product API", () => {
       .patch("/api/products/bulk")
       .set("Authorization", `Bearer ${managerToken}`)
       .send([
-        { id: products[0]._id.toString(), name: "First Must Roll Back" },
-        { id: products[1]._id.toString(), name: "Second Must Fail" },
+        {
+          id: products[0]._id.toString(),
+          name: "First Must Roll Back",
+          expectedVersion: products[0].version,
+        },
+        {
+          id: products[1]._id.toString(),
+          name: "Second Must Fail",
+          expectedVersion: products[1].version,
+        },
       ]);
 
     expect(response.statusCode).toBe(409);
@@ -527,7 +557,12 @@ describe("Product API", () => {
     const response = await request(app)
       .delete("/api/products/bulk")
       .set("Authorization", `Bearer ${adminToken}`)
-      .send({ ids: products.map((product) => product._id.toString()) });
+      .send({
+        items: products.map((product) => ({
+          id: product._id.toString(),
+          expectedVersion: product.version,
+        })),
+      });
 
     expect(response.statusCode).toBe(409);
     expect(response.body).toEqual({
@@ -546,7 +581,12 @@ describe("Product API", () => {
     const response = await request(app)
       .delete("/api/v1/products/bulk")
       .set("Authorization", `Bearer ${adminToken}`)
-      .send({ ids: products.map((product) => product._id.toString()) });
+      .send({
+        items: products.map((product) => ({
+          id: product._id.toString(),
+          expectedVersion: product.version,
+        })),
+      });
 
     expect(response.statusCode).toBe(409);
     expect(response.body).toMatchObject({
@@ -567,7 +607,12 @@ describe("Product API", () => {
     const response = await request(app)
       .delete("/api/products/bulk")
       .set("Authorization", `Bearer ${adminToken}`)
-      .send({ ids: products.map((product) => product._id.toString()) });
+      .send({
+        items: products.map((product) => ({
+          id: product._id.toString(),
+          expectedVersion: product.version,
+        })),
+      });
 
     expect(response.statusCode).toBe(200);
     expect(response.body.data.deletedCount).toBe(2);
@@ -601,7 +646,7 @@ describe("Product API", () => {
     const response = await request(app)
       .patch(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${managerToken}`)
-      .send({ unit: "box" });
+      .send({ unit: "box", expectedVersion: product.version });
 
     expect(response.statusCode).toBe(400);
     expect(response.body.message).toBe("Validation failed");
@@ -656,7 +701,13 @@ describe("Product API", () => {
     const response = await request(app)
       .patch("/api/products/bulk")
       .set("Authorization", `Bearer ${managerToken}`)
-      .send([{ id: product._id.toString(), name: "   " }]);
+      .send([
+        {
+          id: product._id.toString(),
+          name: "   ",
+          expectedVersion: product.version,
+        },
+      ]);
 
     expect(response.statusCode).toBe(400);
     expect((await Product.findById(product._id)).name).toBe("Original Bulk Name");

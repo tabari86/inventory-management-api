@@ -364,6 +364,25 @@ session. The production state of the idempotency and audit/outbox migrations was
 not independently established here. No remote database connection or migration
 was attempted during WP8.
 
+## Mandatory Product/Warehouse version-precondition rollout
+
+The WP3 stale-write correction changes only the command contract and service
+guards. It requires no database or index migration: existing Product and
+Warehouse `version` fields are sufficient, and no schema, index, TTL, backfill,
+or migration script changes are part of the rollout.
+
+This is a breaking client rollout on both `/api/v1` and the temporary `/api`
+alias because both mount the same router. Before sending Product update,
+deactivate, archive, bulk update, or bulk archive—and Warehouse update,
+deactivate, or bulk update—clients must read the current aggregate `version` and
+submit it as `expectedVersion`. Missing/invalid values produce
+`VALIDATION_FAILED`/400; stale values produce `STALE_VERSION`/409. Product bulk
+archive callers must replace `{ "ids": [...] }` with ordered
+`{ "items": [{ "id": "...", "expectedVersion": 1 }] }`. Do not reuse an
+idempotency key that was previously bound to an IDs-only bulk-archive body.
+Creates remain unchanged. This rollout introduces no API v2 and no Warehouse
+archive operation.
+
 ## Operational runtime deployment
 
 Work Package 6 changes process startup, health reporting, shutdown, request

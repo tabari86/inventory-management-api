@@ -162,7 +162,7 @@ describe("Audit/outbox mutation coverage", () => {
     const response = await request(app)
       .patch(`/api/products/${product._id}/deactivate`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ deactivationReason: "planned" });
+      .send({ deactivationReason: "planned", expectedVersion: product.version });
 
     expect(response.status).toBe(200);
     const events = await OutboxEvent.find({}).sort({ createdAt: 1 }).lean();
@@ -197,7 +197,7 @@ describe("Audit/outbox mutation coverage", () => {
     const response = await request(app)
       .patch(`/api/warehouses/${warehouse._id}/deactivate`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ deactivationReason: "planned" });
+      .send({ deactivationReason: "planned", expectedVersion: warehouse.version });
 
     expect(response.status).toBe(200);
     const events = await OutboxEvent.find({}).sort({ _id: 1 }).lean();
@@ -247,7 +247,7 @@ describe("Audit/outbox mutation coverage", () => {
     const response = await request(app)
       .delete(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ archiveReason: "retired" });
+      .send({ archiveReason: "retired", expectedVersion: product.version });
 
     expect(response.status).toBe(200);
     const persisted = await Product.findById(product._id).lean();

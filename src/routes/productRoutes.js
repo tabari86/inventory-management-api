@@ -134,7 +134,7 @@ router.post(
  * /api/products/bulk:
  *   patch:
  *     summary: Update multiple products
- *     description: Updates between 1 and 150 products. Each item requires an ID and at least one updatable product field. Available to admin and manager roles.
+ *     description: Updates between 1 and 150 products. Each item requires an ID, its current expectedVersion, and at least one updatable product field. Available to admin and manager roles.
  *     tags:
  *       - Products
  *     security:
@@ -152,6 +152,7 @@ router.post(
  *               minProperties: 2
  *               required:
  *                 - id
+ *                 - expectedVersion
  *               properties:
  *                 id:
  *                   type: string
@@ -180,7 +181,7 @@ router.post(
  *                 expectedVersion:
  *                   type: integer
  *                   minimum: 1
- *                   description: Optional transitional optimistic-concurrency precondition
+ *                   description: Required optimistic-concurrency precondition
  *                 deactivationReason:
  *                   type: string
  *                   maxLength: 500
@@ -219,7 +220,7 @@ router.patch(
  * /api/products/bulk:
  *   delete:
  *     summary: Archive multiple inactive products (legacy DELETE)
- *     description: Atomically archives between 1 and 150 inactive products without removing documents or references. deletedCount remains a compatibility field. Available to the admin role only.
+ *     description: Atomically archives between 1 and 150 inactive products in request order without removing documents or references. Each item requires its current expectedVersion. deletedCount remains a compatibility field. Available to the admin role only.
  *     deprecated: true
  *     tags:
  *       - Products
@@ -232,17 +233,28 @@ router.patch(
  *           schema:
  *             type: object
  *             required:
- *               - ids
+ *               - items
  *             properties:
- *               ids:
+ *               items:
  *                 type: array
  *                 minItems: 1
  *                 maxItems: 150
  *                 items:
- *                   type: string
+ *                   type: object
+ *                   required:
+ *                     - id
+ *                     - expectedVersion
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     expectedVersion:
+ *                       type: integer
+ *                       minimum: 1
  *                 example:
- *                   - 6a24186174ab9f90ef69cb14
- *                   - 6a24186174ab9f90ef69cb15
+ *                   - id: 6a24186174ab9f90ef69cb14
+ *                     expectedVersion: 3
+ *                   - id: 6a24186174ab9f90ef69cb15
+ *                     expectedVersion: 7
  *     responses:
  *       200:
  *         description: Products deleted successfully; response data includes deletedCount
@@ -403,6 +415,8 @@ router.post(
  *           schema:
  *             type: object
  *             minProperties: 1
+ *             required:
+ *               - expectedVersion
  *             properties:
  *               sku:
  *                 type: string
@@ -428,7 +442,7 @@ router.post(
  *               expectedVersion:
  *                 type: integer
  *                 minimum: 1
- *                 description: Optional transitional optimistic-concurrency precondition
+ *                 description: Required optimistic-concurrency precondition
  *               deactivationReason:
  *                 type: string
  *                 maxLength: 500
@@ -436,7 +450,7 @@ router.post(
  *       200:
  *         description: Product updated successfully
  *       400:
- *         description: Invalid product ID
+ *         description: Validation failed, including a missing or invalid expectedVersion
  *       401:
  *         description: Access token is missing or invalid
  *       403:
@@ -476,11 +490,13 @@ router.patch(
  *           type: string
  *         description: Product ID
  *     requestBody:
- *       required: false
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - expectedVersion
  *             properties:
  *               expectedVersion:
  *                 type: integer
@@ -492,7 +508,7 @@ router.patch(
  *       200:
  *         description: Product deactivated successfully
  *       400:
- *         description: Invalid product ID
+ *         description: Validation failed, including a missing or invalid expectedVersion
  *       401:
  *         description: Access token is missing or invalid
  *       403:
@@ -533,11 +549,13 @@ router.patch(
  *           type: string
  *         description: Product ID
  *     requestBody:
- *       required: false
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - expectedVersion
  *             properties:
  *               expectedVersion:
  *                 type: integer
@@ -549,7 +567,7 @@ router.patch(
  *       200:
  *         description: Product deleted successfully
  *       400:
- *         description: Invalid product ID
+ *         description: Validation failed, including a missing or invalid expectedVersion
  *       401:
  *         description: Access token is missing or invalid
  *       403:

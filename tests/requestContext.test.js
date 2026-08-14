@@ -102,6 +102,37 @@ describe("request context", () => {
     }
   });
 
+  it("preserves request context on a successful version-bearing mutation", async () => {
+    const token = await createManagerToken();
+    const product = await Product.create({
+      sku: "CTX-VERSION-001",
+      name: "Before",
+    });
+
+    const response = await request(app)
+      .patch(`/api/products/${product._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .set("X-Request-ID", "request:product-update.001")
+      .set("X-Correlation-ID", "order:product-update.001")
+      .send({ name: "After", expectedVersion: product.version });
+
+    expect(response.status).toBe(200);
+    expect(response.headers["x-request-id"]).toBe("request:product-update.001");
+    expect(response.headers["x-correlation-id"]).toBe(
+      "order:product-update.001"
+    );
+    for (const event of [
+      await AuditEvent.findOne().lean(),
+      await OutboxEvent.findOne().lean(),
+    ]) {
+      expect(event).toMatchObject({
+        requestId: "request:product-update.001",
+        correlationId: "order:product-update.001",
+        causationId: "request:product-update.001",
+      });
+    }
+  });
+
   it.each([
     "contains whitespace",
     "comma,value",
@@ -168,7 +199,7 @@ describe("request context", () => {
       await request(app)
         .patch("/api/products/64B64C6F2F0F000000000001")
         .set("Authorization", `Bearer ${managerToken}`)
-        .send({ name: "Missing" }),
+        .send({ name: "Missing", expectedVersion: 1 }),
       await request(app).get("/not-a-route"),
     ];
 

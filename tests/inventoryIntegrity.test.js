@@ -89,14 +89,20 @@ describe("Inventory lifecycle enforcement and movement history", () => {
     });
     await productService.updateProduct({
       productId: product._id,
-      update: { name: "Renamed Product" },
+      update: { name: "Renamed Product", expectedVersion: product.version },
     });
     await warehouseService.updateWarehouse({
       warehouseId: warehouse._id,
-      update: { name: "Renamed Warehouse" },
+      update: { name: "Renamed Warehouse", expectedVersion: warehouse.version },
     });
-    await productService.deactivateProduct({ productId: product._id });
-    await productService.archiveProduct({ productId: product._id });
+    await productService.deactivateProduct({
+      productId: product._id,
+      expectedVersion: product.version + 1,
+    });
+    await productService.archiveProduct({
+      productId: product._id,
+      expectedVersion: product.version + 2,
+    });
 
     const persistedMovement = await StockMovement.findById(stockMovement._id)
       .populate("productId")

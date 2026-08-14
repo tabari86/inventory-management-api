@@ -147,12 +147,12 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
       .patch(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${token}`)
       .set("Idempotency-Key", key)
-      .send({ name: "Same" });
+      .send({ name: "Same", expectedVersion: product.version });
     const replay = await request(app)
       .patch(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${token}`)
       .set("Idempotency-Key", key)
-      .send({ name: "Same" });
+      .send({ name: "Same", expectedVersion: product.version });
 
     expect(original.status).toBe(200);
     expect(replay.status).toBe(200);
@@ -182,15 +182,15 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
       await request(app)
         .patch(`/api/products/${product._id}`)
         .set("Authorization", `Bearer ${token}`)
-        .send({ name: "Same" }),
+        .send({ name: "Same", expectedVersion: product.version }),
       await request(app)
         .patch(`/api/warehouses/${warehouse._id}`)
         .set("Authorization", `Bearer ${token}`)
-        .send({ name: "Same" }),
+        .send({ name: "Same", expectedVersion: warehouse.version }),
       await request(app)
         .patch(`/api/products/${product._id}`)
         .set("Authorization", `Bearer ${token}`)
-        .send({ name: "Same" }),
+        .send({ name: "Same", expectedVersion: product.version }),
     ];
 
     expect(responses.map(({ status }) => status)).toEqual([200, 200, 200]);
@@ -210,8 +210,8 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
       .patch("/api/products/bulk")
       .set("Authorization", `Bearer ${token}`)
       .send([
-        { id: unchanged._id, name: "Same" },
-        { id: changed._id, name: "After" },
+        { id: unchanged._id, name: "Same", expectedVersion: unchanged.version },
+        { id: changed._id, name: "After", expectedVersion: changed.version },
       ]);
 
     expect(response.status).toBe(200);
@@ -323,7 +323,10 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
     const warehouseFailure = await request(app)
       .patch(`/api/warehouses/${warehouse._id}/deactivate`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ deactivationReason: "planned" });
+      .send({
+        deactivationReason: "planned",
+        expectedVersion: warehouse.version,
+      });
     expect(warehouseFailure.status).toBe(500);
     expect(await Warehouse.findById(warehouse._id).lean()).toMatchObject({
       status: "active",
@@ -462,7 +465,7 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
     const response = await request(app)
       .patch(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${token}`)
-      .send({ name: "Must roll back" });
+      .send({ name: "Must roll back", expectedVersion: product.version });
 
     expect(response.status).toBe(500);
     expect(await Product.findById(product._id).lean()).toMatchObject({

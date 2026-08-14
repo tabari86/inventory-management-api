@@ -112,8 +112,16 @@ describe("Warehouse API", () => {
       .patch("/api/warehouses/bulk")
       .set("Authorization", `Bearer ${managerToken}`)
       .send([
-        { id: warehouses[0]._id.toString(), name: "Updated One" },
-        { id: warehouses[1]._id.toString(), status: "inactive" },
+        {
+          id: warehouses[0]._id.toString(),
+          name: "Updated One",
+          expectedVersion: warehouses[0].version,
+        },
+        {
+          id: warehouses[1]._id.toString(),
+          status: "inactive",
+          expectedVersion: warehouses[1].version,
+        },
       ]);
 
     expect(response.statusCode).toBe(200);
@@ -137,6 +145,7 @@ describe("Warehouse API", () => {
           id: warehouse._id.toString(),
           code: "WH-CHANGED",
           name: "Changed Name",
+          expectedVersion: warehouse.version,
         },
       ]);
 
@@ -170,7 +179,7 @@ describe("Warehouse API", () => {
     const response = await request(app)
       .patch(`/api/warehouses/${warehouse._id}`)
       .set("Authorization", `Bearer ${managerToken}`)
-      .send({ code: "WH-CHANGED" });
+      .send({ code: "WH-CHANGED", expectedVersion: warehouse.version });
 
     expect(response.statusCode).toBe(400);
     expect((await Warehouse.findById(warehouse._id)).code).toBe("WH-ORIGINAL");
@@ -225,7 +234,13 @@ describe("Warehouse API", () => {
     const response = await request(app)
       .patch("/api/warehouses/bulk")
       .set("Authorization", `Bearer ${managerToken}`)
-      .send([{ id: warehouse._id.toString(), name: "   " }]);
+      .send([
+        {
+          id: warehouse._id.toString(),
+          name: "   ",
+          expectedVersion: warehouse.version,
+        },
+      ]);
 
     expect(response.statusCode).toBe(400);
     expect((await Warehouse.findById(warehouse._id)).name).toBe(

@@ -174,7 +174,6 @@ const assertObjectId = (id, message = "Invalid product ID") => {
 
 const assertExpectedVersion = (expectedVersion) => {
   if (
-    expectedVersion !== undefined &&
     (!Number.isInteger(expectedVersion) || expectedVersion < 1)
   ) {
     throw createDomainError(
@@ -440,10 +439,7 @@ const updateProductInSession = async ({
   assertCurrentVersion(product.version);
   assertExpectedVersion(update.expectedVersion);
 
-  if (
-    update.expectedVersion !== undefined &&
-    update.expectedVersion !== product.version
-  ) {
+  if (update.expectedVersion !== product.version) {
     throw staleVersionError();
   }
 
@@ -472,7 +468,7 @@ const updateProductInSession = async ({
   const updatedProduct = await Product.findOneAndUpdate(
     {
       _id: product._id,
-      version: product.version,
+      version: update.expectedVersion,
       archivedAt: null,
     },
     updateDocument,
@@ -623,9 +619,9 @@ const updateProduct = async ({
   session,
   eventCollector,
 }) => {
-  assertObjectId(productId);
   assertProductUpdateCommand(update);
   assertExpectedVersion(update.expectedVersion);
+  assertObjectId(productId);
 
   try {
     const execute = async (currentSession) => {
@@ -667,7 +663,10 @@ const updateProductsBulk = async ({
   eventCollector,
 }) => {
   assertBulkArray(updates, "updates", "Product updates");
-  updates.forEach(assertProductUpdateCommand);
+  updates.forEach((update) => {
+    assertProductUpdateCommand(update);
+    assertExpectedVersion(update.expectedVersion);
+  });
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -694,6 +693,17 @@ const updateProductsBulk = async ({
         );
       }
 
+      const productById = new Map(
+        products.map((product) => [product._id.toString(), product])
+      );
+      updates.forEach((update) => {
+        const product = productById.get(normalizeId(update.id));
+        assertCurrentVersion(product.version);
+        if (update.expectedVersion !== product.version) {
+          throw staleVersionError();
+        }
+      });
+
       const explicitlySubmittedSkus = updates
         .filter((update) => update.sku !== undefined)
         .map((update) => normalizedProductValue("sku", update.sku));
@@ -708,10 +718,6 @@ const updateProductsBulk = async ({
           "Duplicate SKUs are not allowed in the same request"
         );
       }
-
-      const productById = new Map(
-        products.map((product) => [product._id.toString(), product])
-      );
 
       if (explicitlySubmittedSkus.length > 0) {
         const currentSkuOwners = await Product.find({
@@ -797,8 +803,8 @@ const archiveProduct = async ({
   session,
   eventCollector,
 }) => {
-  assertObjectId(productId);
   assertExpectedVersion(expectedVersion);
+  assertObjectId(productId);
   assertOptionalText(archiveReason, {
     field: "archiveReason",
     label: "Archive reason",
@@ -816,17 +822,17 @@ const archiveProduct = async ({
       );
     }
 
+    assertCurrentVersion(product.version);
+    if (expectedVersion !== product.version) {
+      throw staleVersionError();
+    }
+
     if (product.status === "active") {
       throw createDomainError(
         errorCodes.INVALID_RESOURCE_STATE,
         409,
         "Active products must be deactivated before deletion"
       );
-    }
-
-    assertCurrentVersion(product.version);
-    if (expectedVersion !== undefined && expectedVersion !== product.version) {
-      throw staleVersionError();
     }
 
     const fieldsToSet = {
@@ -838,7 +844,7 @@ const archiveProduct = async ({
     if (reason) fieldsToSet.archiveReason = reason;
 
     const archivedProduct = await Product.findOneAndUpdate(
-      { _id: product._id, version: product.version, archivedAt: null },
+      { _id: product._id, version: expectedVersion, archivedAt: null },
       { $set: fieldsToSet, $inc: { version: 1 } },
       { returnDocument: "after", session: currentSession, runValidators: true }
     );
@@ -873,20 +879,28 @@ const archiveProduct = async ({
 };
 
 const archiveProductsBulk = async ({
-  ids,
+  items,
   actorId,
   archiveReason,
   session,
   eventCollector,
 }) => {
-  assertBulkArray(ids, "ids", "Product IDs");
+  assertBulkArray(items, "items", "Product archive items");
   assertOptionalText(archiveReason, {
     field: "archiveReason",
     label: "Archive reason",
     max: 500,
   });
-  ids.forEach((id) => assertObjectId(id));
-  const normalizedIds = ids.map(normalizeId);
+  items.forEach((item) => {
+    assertCommandObject(
+      item,
+      "items",
+      "Each Product archive item must be an object"
+    );
+    assertExpectedVersion(item.expectedVersion);
+    assertObjectId(item.id);
+  });
+  const normalizedIds = items.map(({ id }) => normalizeId(id));
 
   if (new Set(normalizedIds).size !== normalizedIds.length) {
     throw createDomainError(
@@ -912,6 +926,17 @@ const archiveProductsBulk = async ({
       );
     }
 
+    const productById = new Map(
+      products.map((product) => [product._id.toString(), product])
+    );
+    items.forEach(({ id, expectedVersion }) => {
+      const product = productById.get(normalizeId(id));
+      assertCurrentVersion(product.version);
+      if (expectedVersion !== product.version) {
+        throw staleVersionError();
+      }
+    });
+
     if (products.some((product) => product.status === "active")) {
       throw createDomainError(
         errorCodes.INVALID_RESOURCE_STATE,
@@ -920,15 +945,12 @@ const archiveProductsBulk = async ({
       );
     }
 
-    const productById = new Map(
-      products.map((product) => [product._id.toString(), product])
-    );
     const reason = normalizeReason(archiveReason);
 
-    for (let index = 0; index < normalizedIds.length; index += 1) {
-      const id = normalizedIds[index];
+    for (let index = 0; index < items.length; index += 1) {
+      const { id: submittedId, expectedVersion } = items[index];
+      const id = normalizeId(submittedId);
       const product = productById.get(id);
-      assertCurrentVersion(product.version);
       const fieldsToSet = {
         status: "inactive",
         archivedAt: new Date(),
@@ -937,7 +959,7 @@ const archiveProductsBulk = async ({
       if (reason) fieldsToSet.archiveReason = reason;
 
       const archivedProduct = await Product.findOneAndUpdate(
-        { _id: product._id, version: product.version, archivedAt: null },
+        { _id: product._id, version: expectedVersion, archivedAt: null },
         { $set: fieldsToSet, $inc: { version: 1 } },
         {
           returnDocument: "after",

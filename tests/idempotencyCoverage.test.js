@@ -188,6 +188,12 @@ const assertPersistedEventSet = async ({
 
 const buildConflictingBody = (body) => {
   if (Array.isArray(body)) {
+    if (Object.prototype.hasOwnProperty.call(body[0], "expectedVersion")) {
+      return [
+        { ...body[0], expectedVersion: body[0].expectedVersion + 1 },
+        ...body.slice(1),
+      ];
+    }
     if (Object.prototype.hasOwnProperty.call(body[0], "quantity")) {
       return [{ ...body[0], quantity: body[0].quantity + 1 }, ...body.slice(1)];
     }
@@ -197,7 +203,15 @@ const buildConflictingBody = (body) => {
     return [...body].reverse();
   }
 
-  if (Array.isArray(body.ids)) return { ...body, ids: [...body.ids].reverse() };
+  if (Array.isArray(body.items)) {
+    return {
+      ...body,
+      items: [
+        { ...body.items[0], expectedVersion: body.items[0].expectedVersion + 1 },
+        ...body.items.slice(1),
+      ],
+    };
+  }
   if (Object.prototype.hasOwnProperty.call(body, "quantity")) {
     return { ...body, quantity: body.quantity + 1 };
   }
@@ -246,6 +260,7 @@ const cases = [
         body: products.map((item, index) => ({
           id: item._id.toString(),
           name: `After ${index + 1}`,
+          expectedVersion: item.version,
         })),
         verify: async () => {
           const updated = await Product.find({}).sort({ sku: 1 }).lean();
@@ -267,7 +282,12 @@ const cases = [
         { sku: "COVER-P-BA-2", name: "Archive two", status: "inactive" },
       ]);
       return {
-        body: { ids: products.map(({ _id }) => _id.toString()) },
+        body: {
+          items: products.map(({ _id, version }) => ({
+            id: _id.toString(),
+            expectedVersion: version,
+          })),
+        },
         verify: async (response) => {
           expect(response.body.data.deletedCount).toBe(2);
           expect(await Product.countDocuments({ archivedAt: { $ne: null } })).toBe(2);
@@ -375,6 +395,7 @@ const cases = [
         body: warehouses.map((item, index) => ({
           id: item._id.toString(),
           name: `After ${index + 1}`,
+          expectedVersion: item.version,
         })),
         verify: async () => {
           const updated = await Warehouse.find({}).sort({ code: 1 }).lean();

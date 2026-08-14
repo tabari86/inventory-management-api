@@ -149,12 +149,12 @@ describe("Inventory Core idempotency", () => {
       .patch(`/api/products/${firstProduct._id}`)
       .set("Authorization", `Bearer ${token}`)
       .set("Idempotency-Key", "path.target:conflict")
-      .send({ name: "Changed" });
+      .send({ name: "Changed", expectedVersion: firstProduct.version });
     const conflict = await request(app)
       .patch(`/api/products/${secondProduct._id}`)
       .set("Authorization", `Bearer ${token}`)
       .set("Idempotency-Key", "path.target:conflict")
-      .send({ name: "Changed" });
+      .send({ name: "Changed", expectedVersion: secondProduct.version });
 
     expect(first.status).toBe(200);
     expect(conflict.status).toBe(409);

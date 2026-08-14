@@ -132,7 +132,10 @@ describe("Verification 1B-A service error contracts", () => {
     });
 
     await expect(
-      productService.archiveProduct({ productId: product._id.toString() })
+      productService.archiveProduct({
+        productId: product._id.toString(),
+        expectedVersion: product.version,
+      })
     ).rejects.toMatchObject({
       code: "INVALID_RESOURCE_STATE",
       httpStatus: 409,

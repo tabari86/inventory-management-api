@@ -4,6 +4,8 @@ const request = require("supertest");
 const app = require("../src/app");
 const DomainError = require("../src/errors/DomainError");
 const errorCodes = require("../src/errors/errorCodes");
+const AuditEvent = require("../src/models/AuditEvent");
+const OutboxEvent = require("../src/models/OutboxEvent");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
 const StockMovement = require("../src/models/StockMovement");
@@ -51,7 +53,7 @@ describe("Lifecycle and explicit aggregate versions", () => {
 
     const updated = await productService.updateProduct({
       productId: product._id,
-      update: { name: "Meaningfully Updated" },
+      update: { name: "Meaningfully Updated", expectedVersion: 1 },
     });
     expect(updated.version).toBe(2);
 
@@ -177,7 +179,7 @@ describe("Lifecycle and explicit aggregate versions", () => {
     const updateArchived = await request(app)
       .patch(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${adminToken}`)
-      .send({ status: "active" });
+      .send({ status: "active", expectedVersion: archived.version });
     expect(updateArchived.statusCode).toBe(404);
   });
 
@@ -192,14 +194,24 @@ describe("Lifecycle and explicit aggregate versions", () => {
     const rejected = await request(app)
       .delete("/api/products/bulk")
       .set("Authorization", `Bearer ${adminToken}`)
-      .send({ ids: [products[0]._id.toString(), missingId.toString()] });
+      .send({
+        items: [
+          { id: products[0]._id.toString(), expectedVersion: 1 },
+          { id: missingId.toString(), expectedVersion: 1 },
+        ],
+      });
     expect(rejected.statusCode).toBe(404);
     expect(await Product.countDocuments({ archivedAt: { $ne: null } })).toBe(0);
 
     const accepted = await request(app)
       .delete("/api/products/bulk")
       .set("Authorization", `Bearer ${adminToken}`)
-      .send({ ids: products.map((product) => product._id.toString()) });
+      .send({
+        items: products.map((product) => ({
+          id: product._id.toString(),
+          expectedVersion: product.version,
+        })),
+      });
     expect(accepted.statusCode).toBe(200);
     expect(accepted.body.data).toEqual({ deletedCount: 2 });
     expect(await Product.countDocuments()).toBe(2);
@@ -218,7 +230,8 @@ describe("Lifecycle and explicit aggregate versions", () => {
 
     const response = await request(app)
       .delete(`/api/products/${product._id}`)
-      .set("Authorization", `Bearer ${adminToken}`);
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ expectedVersion: product.version });
 
     expect(response.statusCode).toBe(200);
     expect(deleteManySpy).not.toHaveBeenCalled();
@@ -350,8 +363,14 @@ describe("Lifecycle and explicit aggregate versions", () => {
 
       const lifecycleMutation =
         parentType === "Product"
-          ? productService.deactivateProduct({ productId: product._id })
-          : warehouseService.deactivateWarehouse({ warehouseId: warehouse._id });
+          ? productService.deactivateProduct({
+              productId: product._id,
+              expectedVersion: product.version,
+            })
+          : warehouseService.deactivateWarehouse({
+              warehouseId: warehouse._id,
+              expectedVersion: warehouse.version,
+            });
 
       const failure = await lifecycleMutation.catch((error) => error);
       expect(failure).toBeInstanceOf(DomainError);
@@ -399,8 +418,14 @@ describe("Lifecycle and explicit aggregate versions", () => {
             });
       const lifecycleMutation =
         parentType === "Product"
-          ? productService.deactivateProduct({ productId: product._id })
-          : warehouseService.deactivateWarehouse({ warehouseId: warehouse._id });
+          ? productService.deactivateProduct({
+              productId: product._id,
+              expectedVersion: product.version,
+            })
+          : warehouseService.deactivateWarehouse({
+              warehouseId: warehouse._id,
+              expectedVersion: warehouse.version,
+            });
 
       const [inventoryResult] = await Promise.allSettled([
         inventoryMutation,
@@ -447,8 +472,14 @@ describe("Lifecycle and explicit aggregate versions", () => {
       });
       const lifecycleResult =
         parentType === "Product"
-          ? productService.deactivateProduct({ productId: product._id })
-          : warehouseService.deactivateWarehouse({ warehouseId: warehouse._id });
+          ? productService.deactivateProduct({
+              productId: product._id,
+              expectedVersion: product.version,
+            })
+          : warehouseService.deactivateWarehouse({
+              warehouseId: warehouse._id,
+              expectedVersion: warehouse.version,
+            });
 
       await Promise.allSettled([createResult, lifecycleResult]);
 
@@ -471,4 +502,352 @@ describe("Lifecycle and explicit aggregate versions", () => {
       }
     }
   );
+
+  describe("mandatory caller-observed lifecycle versions", () => {
+    it("rejects a Product HTTP update that omits expectedVersion", async () => {
+      const managerToken = await createManagerToken();
+      const { product } = await createInventory();
+
+      const response = await request(app)
+        .patch(`/api/v1/products/${product._id}`)
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send({ name: "Must Not Apply" });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toMatchObject({
+        code: errorCodes.VALIDATION_FAILED,
+        status: 400,
+        retryable: false,
+      });
+      expect(await Product.findById(product._id)).toMatchObject({
+        name: product.name,
+        version: 1,
+      });
+    });
+
+    it("rejects direct Product service omission before mutation", async () => {
+      const { product } = await createInventory();
+
+      await expect(
+        productService.updateProduct({
+          productId: product._id,
+          update: { name: "Must Not Apply" },
+        })
+      ).rejects.toMatchObject({
+        code: errorCodes.VALIDATION_FAILED,
+        httpStatus: 400,
+        retryable: false,
+      });
+      expect(await Product.findById(product._id)).toMatchObject({
+        name: product.name,
+        version: 1,
+      });
+    });
+
+    it("does not let an omitted stale Product command overwrite a newer value", async () => {
+      const managerToken = await createManagerToken();
+      const { product } = await createInventory();
+      await productService.updateProduct({
+        productId: product._id,
+        update: { name: "Newer Name", expectedVersion: 1 },
+      });
+
+      const response = await request(app)
+        .patch(`/api/v1/products/${product._id}`)
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send({ name: "Stale Client Name" });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(await Product.findById(product._id)).toMatchObject({
+        name: "Newer Name",
+        version: 2,
+      });
+    });
+
+    it("rejects Product deactivate and archive commands without expectedVersion", async () => {
+      const managerToken = await createManagerToken();
+      const adminToken = await createAdminToken();
+      const activeProduct = await Product.create({
+        sku: `REQUIRED-DEACTIVATE-${++sequence}`,
+        name: "Required Deactivate",
+      });
+      const inactiveProduct = await Product.create({
+        sku: `REQUIRED-ARCHIVE-${++sequence}`,
+        name: "Required Archive",
+        status: "inactive",
+      });
+
+      const deactivateResponse = await request(app)
+        .patch(`/api/v1/products/${activeProduct._id}/deactivate`)
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send({ deactivationReason: "missing precondition" });
+      const archiveResponse = await request(app)
+        .delete(`/api/v1/products/${inactiveProduct._id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ archiveReason: "missing precondition" });
+
+      expect(deactivateResponse.statusCode).toBe(400);
+      expect(deactivateResponse.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(archiveResponse.statusCode).toBe(400);
+      expect(archiveResponse.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(await Product.findById(activeProduct._id)).toMatchObject({
+        status: "active",
+        version: 1,
+      });
+      const persistedInactiveProduct = await Product.findById(inactiveProduct._id);
+      expect(persistedInactiveProduct.archivedAt).toBeUndefined();
+      expect(persistedInactiveProduct.version).toBe(1);
+    });
+
+    it("rejects a Product bulk update when one item omits expectedVersion", async () => {
+      const managerToken = await createManagerToken();
+      const products = await Product.create([
+        { sku: `REQUIRED-BULK-P1-${++sequence}`, name: "Bulk One" },
+        { sku: `REQUIRED-BULK-P2-${++sequence}`, name: "Bulk Two" },
+      ]);
+
+      const response = await request(app)
+        .patch("/api/v1/products/bulk")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send([
+          { id: products[0]._id.toString(), name: "Changed One", expectedVersion: 1 },
+          { id: products[1]._id.toString(), name: "Changed Two" },
+        ]);
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(
+        (await Product.find({ _id: { $in: products.map(({ _id }) => _id) } }).sort({ sku: 1 })).map(
+          ({ name, version }) => ({ name, version })
+        )
+      ).toEqual([
+        { name: "Bulk One", version: 1 },
+        { name: "Bulk Two", version: 1 },
+      ]);
+    });
+
+    it("rejects the obsolete Product bulk archive ids-only contract without side effects", async () => {
+      const adminToken = await createAdminToken();
+      const products = await Product.create([
+        { sku: `OLD-BULK-ARCHIVE-1-${++sequence}`, name: "Old One", status: "inactive" },
+        { sku: `OLD-BULK-ARCHIVE-2-${++sequence}`, name: "Old Two", status: "inactive" },
+      ]);
+
+      const response = await request(app)
+        .delete("/api/v1/products/bulk")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ ids: products.map(({ _id }) => _id.toString()) });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(await Product.countDocuments({ archivedAt: { $ne: null } })).toBe(0);
+      expect(await AuditEvent.countDocuments()).toBe(0);
+      expect(await OutboxEvent.countDocuments()).toBe(0);
+    });
+
+    it("rolls back Product bulk archive when one item version is stale", async () => {
+      const adminToken = await createAdminToken();
+      const products = await Product.create([
+        { sku: `STALE-BULK-ARCHIVE-1-${++sequence}`, name: "Archive One", status: "inactive" },
+        { sku: `STALE-BULK-ARCHIVE-2-${++sequence}`, name: "Archive Two", status: "inactive" },
+      ]);
+
+      const response = await request(app)
+        .delete("/api/v1/products/bulk")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({
+          items: [
+            { id: products[0]._id.toString(), expectedVersion: 1 },
+            { id: products[1]._id.toString(), expectedVersion: 9 },
+          ],
+        });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toMatchObject({
+        code: errorCodes.STALE_VERSION,
+        retryable: false,
+      });
+      expect(await Product.countDocuments({ archivedAt: { $ne: null } })).toBe(0);
+      expect(await AuditEvent.countDocuments()).toBe(0);
+      expect(await OutboxEvent.countDocuments()).toBe(0);
+    });
+
+    it("evaluates stale Product archive before active-state rejection", async () => {
+      const { product } = await createInventory();
+      const updated = await productService.updateProduct({
+        productId: product._id,
+        update: { name: "Version Two", expectedVersion: 1 },
+      });
+
+      await expect(
+        productService.archiveProduct({
+          productId: product._id,
+          expectedVersion: 1,
+        })
+      ).rejects.toMatchObject({
+        code: errorCodes.STALE_VERSION,
+        httpStatus: 409,
+      });
+      await expect(
+        productService.archiveProduct({
+          productId: product._id,
+          expectedVersion: updated.version,
+        })
+      ).rejects.toMatchObject({
+        code: errorCodes.INVALID_RESOURCE_STATE,
+        httpStatus: 409,
+      });
+    });
+
+    it("rejects a Warehouse HTTP update that omits expectedVersion", async () => {
+      const managerToken = await createManagerToken();
+      const { warehouse } = await createInventory();
+
+      const response = await request(app)
+        .patch(`/api/v1/warehouses/${warehouse._id}`)
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send({ name: "Must Not Apply" });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toMatchObject({
+        code: errorCodes.VALIDATION_FAILED,
+        status: 400,
+        retryable: false,
+      });
+      expect(await Warehouse.findById(warehouse._id)).toMatchObject({
+        name: warehouse.name,
+        version: 1,
+      });
+    });
+
+    it("rejects direct Warehouse service omission before mutation", async () => {
+      const { warehouse } = await createInventory();
+
+      await expect(
+        warehouseService.updateWarehouse({
+          warehouseId: warehouse._id,
+          update: { name: "Must Not Apply" },
+        })
+      ).rejects.toMatchObject({
+        code: errorCodes.VALIDATION_FAILED,
+        httpStatus: 400,
+        retryable: false,
+      });
+      expect(await Warehouse.findById(warehouse._id)).toMatchObject({
+        name: warehouse.name,
+        version: 1,
+      });
+    });
+
+    it("does not let an omitted stale Warehouse command overwrite a newer value", async () => {
+      const managerToken = await createManagerToken();
+      const { warehouse } = await createInventory();
+      await warehouseService.updateWarehouse({
+        warehouseId: warehouse._id,
+        update: { name: "Newer Warehouse", expectedVersion: 1 },
+      });
+
+      const response = await request(app)
+        .patch(`/api/v1/warehouses/${warehouse._id}`)
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send({ name: "Stale Warehouse" });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(await Warehouse.findById(warehouse._id)).toMatchObject({
+        name: "Newer Warehouse",
+        version: 2,
+      });
+    });
+
+    it("rejects Warehouse deactivate and bulk update omissions", async () => {
+      const managerToken = await createManagerToken();
+      const warehouses = await Warehouse.create([
+        { code: `REQUIRED-WH-1-${++sequence}`, name: "Warehouse One" },
+        { code: `REQUIRED-WH-2-${++sequence}`, name: "Warehouse Two" },
+      ]);
+
+      const deactivateResponse = await request(app)
+        .patch(`/api/v1/warehouses/${warehouses[0]._id}/deactivate`)
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send({ deactivationReason: "missing precondition" });
+      const bulkResponse = await request(app)
+        .patch("/api/v1/warehouses/bulk")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send([
+          { id: warehouses[0]._id.toString(), name: "Changed One", expectedVersion: 1 },
+          { id: warehouses[1]._id.toString(), name: "Changed Two" },
+        ]);
+
+      expect(deactivateResponse.statusCode).toBe(400);
+      expect(deactivateResponse.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(bulkResponse.statusCode).toBe(400);
+      expect(bulkResponse.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(
+        (await Warehouse.find({ _id: { $in: warehouses.map(({ _id }) => _id) } }).sort({ code: 1 })).map(
+          ({ name, status, version }) => ({ name, status, version })
+        )
+      ).toEqual([
+        { name: "Warehouse One", status: "active", version: 1 },
+        { name: "Warehouse Two", status: "active", version: 1 },
+      ]);
+    });
+
+    it("rejects an omitted stale Warehouse bulk item before any batch write", async () => {
+      const managerToken = await createManagerToken();
+      const warehouses = await Warehouse.create([
+        { code: `STALE-WH-1-${++sequence}`, name: "Warehouse One" },
+        { code: `STALE-WH-2-${++sequence}`, name: "Warehouse Two" },
+      ]);
+      await warehouseService.updateWarehouse({
+        warehouseId: warehouses[1]._id,
+        update: { name: "Newer Warehouse Two", expectedVersion: 1 },
+      });
+
+      const response = await request(app)
+        .patch("/api/v1/warehouses/bulk")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send([
+          { id: warehouses[0]._id.toString(), name: "Changed One", expectedVersion: 1 },
+          { id: warehouses[1]._id.toString(), name: "Stale Client Two" },
+        ]);
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body.code).toBe(errorCodes.VALIDATION_FAILED);
+      expect(
+        (await Warehouse.find({ _id: { $in: warehouses.map(({ _id }) => _id) } }).sort({ code: 1 })).map(
+          ({ name, version }) => ({ name, version })
+        )
+      ).toEqual([
+        { name: "Warehouse One", version: 1 },
+        { name: "Newer Warehouse Two", version: 2 },
+      ]);
+    });
+
+    it("keeps fresh no-ops stable and rejects stale no-op commands", async () => {
+      const { product } = await createInventory();
+      const unchanged = await productService.updateProduct({
+        productId: product._id,
+        update: { name: product.name, expectedVersion: 1 },
+      });
+      expect(unchanged.version).toBe(1);
+
+      const updated = await productService.updateProduct({
+        productId: product._id,
+        update: { name: "Current Name", expectedVersion: 1 },
+      });
+      expect(updated.version).toBe(2);
+      await expect(
+        productService.updateProduct({
+          productId: product._id,
+          update: { name: "Current Name", expectedVersion: 1 },
+        })
+      ).rejects.toMatchObject({
+        code: errorCodes.STALE_VERSION,
+        httpStatus: 409,
+      });
+      expect((await Product.findById(product._id)).version).toBe(2);
+    });
+  });
 });

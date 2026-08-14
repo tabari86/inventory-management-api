@@ -181,7 +181,6 @@ const assertObjectId = (id, message = "Invalid warehouse ID") => {
 
 const assertExpectedVersion = (expectedVersion) => {
   if (
-    expectedVersion !== undefined &&
     (!Number.isInteger(expectedVersion) || expectedVersion < 1)
   ) {
     throw createDomainError(
@@ -428,10 +427,7 @@ const updateWarehouseInSession = async ({
   assertCurrentVersion(warehouse.version);
   assertExpectedVersion(update.expectedVersion);
 
-  if (
-    update.expectedVersion !== undefined &&
-    update.expectedVersion !== warehouse.version
-  ) {
+  if (update.expectedVersion !== warehouse.version) {
     throw staleVersionError();
   }
 
@@ -458,7 +454,7 @@ const updateWarehouseInSession = async ({
   }
 
   const updatedWarehouse = await Warehouse.findOneAndUpdate(
-    { _id: warehouse._id, version: warehouse.version },
+    { _id: warehouse._id, version: update.expectedVersion },
     updateDocument,
     { returnDocument: "after", session, runValidators: true }
   );
@@ -591,9 +587,9 @@ const updateWarehouse = async ({
   session,
   eventCollector,
 }) => {
-  assertObjectId(warehouseId);
   assertWarehouseUpdateCommand(update);
   assertExpectedVersion(update.expectedVersion);
+  assertObjectId(warehouseId);
 
   const execute = async (currentSession) => {
     const warehouse = await Warehouse.findById(warehouseId).session(
@@ -634,7 +630,10 @@ const updateWarehousesBulk = async ({
   eventCollector,
 }) => {
   assertBulkArray(updates, "updates", "Warehouse updates");
-  updates.forEach(assertWarehouseUpdateCommand);
+  updates.forEach((update) => {
+    assertWarehouseUpdateCommand(update);
+    assertExpectedVersion(update.expectedVersion);
+  });
   const ids = updates.map((update) => normalizeId(update.id));
   ids.forEach((id) => assertObjectId(id));
 
@@ -662,6 +661,13 @@ const updateWarehousesBulk = async ({
     const warehouseById = new Map(
       warehouses.map((warehouse) => [warehouse._id.toString(), warehouse])
     );
+    updates.forEach((update) => {
+      const warehouse = warehouseById.get(normalizeId(update.id));
+      assertCurrentVersion(warehouse.version);
+      if (update.expectedVersion !== warehouse.version) {
+        throw staleVersionError();
+      }
+    });
     const updatedWarehouses = [];
 
     for (let index = 0; index < updates.length; index += 1) {

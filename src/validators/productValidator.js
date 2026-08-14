@@ -108,7 +108,9 @@ const updateProductValidation = [
     .withMessage("Invalid product status"),
 
   body("expectedVersion")
-    .optional()
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
     .isInt({ min: 1 })
     .withMessage("Expected version must be a positive integer")
     .toInt(),
@@ -246,7 +248,9 @@ const updateBulkProductsValidation = [
     .withMessage("Invalid product status"),
 
   body("*.expectedVersion")
-    .optional()
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
     .isInt({ min: 1 })
     .withMessage("Expected version must be a positive integer")
     .toInt(),
@@ -262,18 +266,38 @@ const updateBulkProductsValidation = [
 ];
 
 const deleteBulkProductsValidation = [
-  body("ids")
+  body("items")
     .isArray({ min: 1, max: 150 })
-    .withMessage("IDs must be an array containing between 1 and 150 items"),
+    .withMessage("Items must be an array containing between 1 and 150 products"),
 
-  body("ids.*")
+  body("items.*").custom((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error("Each archive item must be an object");
+    }
+    return true;
+  }),
+
+  body("items.*.id")
+    .notEmpty()
+    .withMessage("Product ID is required")
+    .bail()
     .isMongoId()
     .withMessage("Invalid product ID"),
+
+  body("items.*.expectedVersion")
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
+    .isInt({ min: 1 })
+    .withMessage("Expected version must be a positive integer")
+    .toInt(),
 ];
 
 const deactivateProductValidation = [
   body("expectedVersion")
-    .optional()
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
     .isInt({ min: 1 })
     .withMessage("Expected version must be a positive integer")
     .toInt(),
@@ -290,7 +314,9 @@ const deactivateProductValidation = [
 
 const archiveProductValidation = [
   body("expectedVersion")
-    .optional()
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
     .isInt({ min: 1 })
     .withMessage("Expected version must be a positive integer")
     .toInt(),

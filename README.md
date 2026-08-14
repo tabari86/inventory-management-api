@@ -569,7 +569,8 @@ The seed command is safe to run again. If an admin already exists, no new admin 
 - New products are active by default.
 - Products can be updated partially.
 - Product and Warehouse updates expose an explicit `version`; `__v` is not the domain version.
-- Update/deactivate requests may supply an optional positive-integer `expectedVersion`.
+- Product update, deactivate, archive, bulk update, and bulk archive requests require a positive-integer `expectedVersion` for every existing aggregate. Warehouse update, deactivate, and bulk update requests have the same requirement.
+- Missing or invalid versions fail with `VALIDATION_FAILED` (`400`); a supplied stale version fails with `STALE_VERSION` (`409`), including stale no-op commands.
 - Products must be deactivated before the legacy DELETE route can archive them.
 - Archive retains the Product, prevents SKU reuse, preserves Stock and movement references, and hides the Product from normal Product reads and updates.
 - Archived Products are terminal in the current API and have no restore endpoint.
@@ -746,10 +747,32 @@ derived Stock guards, then write that same Stock aggregate so concurrent parent
 lifecycle changes conflict safely.
 
 `version` is the authoritative domain aggregate revision; Mongoose `__v` is not
-the API concurrency contract. `expectedVersion` is optional on the current
-legacy Product/Warehouse mutation APIs, so clients that omit it can still have
-last-write-wins behavior. Mandatory preconditions are deferred to an approved
-versioned API contract.
+the API concurrency contract. Existing-aggregate Product and Warehouse mutations
+require the current positive-integer `expectedVersion` at both the HTTP and
+service boundaries. The comparison happens before no-op or lifecycle-state
+decisions, and each write uses compare-and-swap. Omission or an invalid value is
+`VALIDATION_FAILED` (`400`); a mismatch is `STALE_VERSION` (`409`). Create
+operations are unchanged.
+
+Product bulk archive uses an ordered version-bearing body rather than the former
+IDs-only shape:
+
+```json
+{
+  "items": [
+    { "id": "6a24186174ab9f90ef69cb14", "expectedVersion": 3 },
+    { "id": "6a24186174ab9f90ef69cb15", "expectedVersion": 7 }
+  ]
+}
+```
+
+This is a breaking client rollout for both canonical `/api/v1` and temporary
+`/api` aliases because they share the hardened router. Clients must read the
+current aggregate version and submit it with every affected command; bulk
+archive callers must replace `{ "ids": [...] }` with version-bearing `items`.
+Do not reuse idempotency keys previously associated with an IDs-only bulk-archive
+body. This change adds no API v2, Warehouse archive, database migration, or index
+migration.
 
 Transactions provide atomic database persistence and driver retry safety.
 Inventory Core mutation routes additionally support optional, actor-scoped
@@ -1263,7 +1286,7 @@ Some design choices are intentional:
 - Product archive replaces supported runtime hard delete and preserves historical references
 - inventory workflows require active Product, Warehouse, Stock, and synchronized lifecycle guards
 - explicit `version` fields are domain revisions; `__v` remains Mongoose-internal
-- optional `expectedVersion` is transitional and omission still permits last-write-wins
+- affected Product/Warehouse existing-aggregate mutations require the current `expectedVersion`; omission never permits last-write-wins
 - goods issue uses conditional stock updates to reduce normal overselling risk
 - Inventory Core mutations use MongoDB transactions and support optional seven-day idempotent replay; callers that omit the header retain legacy behavior
 - login rate limiting is process-local and suitable for this single-instance demo setup

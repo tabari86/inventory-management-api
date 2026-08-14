@@ -126,7 +126,7 @@ router.post(
  * /api/warehouses/bulk:
  *   patch:
  *     summary: Update multiple warehouses
- *     description: Updates between 1 and 150 warehouses. Each item requires an ID and at least one of name, description, or status; warehouse codes cannot be changed. Available to admin and manager roles.
+ *     description: Updates between 1 and 150 warehouses. Each item requires an ID, its current expectedVersion, and at least one of name, description, or status; warehouse codes cannot be changed. Available to admin and manager roles.
  *     tags:
  *       - Warehouses
  *     security:
@@ -144,6 +144,7 @@ router.post(
  *               minProperties: 2
  *               required:
  *                 - id
+ *                 - expectedVersion
  *               properties:
  *                 id:
  *                   type: string
@@ -163,7 +164,7 @@ router.post(
  *                 expectedVersion:
  *                   type: integer
  *                   minimum: 1
- *                   description: Optional transitional optimistic-concurrency precondition
+ *                   description: Required optimistic-concurrency precondition
  *                 deactivationReason:
  *                   type: string
  *                   maxLength: 500
@@ -320,6 +321,8 @@ router.post(
  *           schema:
  *             type: object
  *             minProperties: 1
+ *             required:
+ *               - expectedVersion
  *             properties:
  *               name:
  *                 type: string
@@ -336,7 +339,7 @@ router.post(
  *               expectedVersion:
  *                 type: integer
  *                 minimum: 1
- *                 description: Optional transitional optimistic-concurrency precondition
+ *                 description: Required optimistic-concurrency precondition
  *               deactivationReason:
  *                 type: string
  *                 maxLength: 500
@@ -344,7 +347,7 @@ router.post(
  *       200:
  *         description: Warehouse updated successfully
  *       400:
- *         description: Invalid warehouse ID
+ *         description: Validation failed, including a missing or invalid expectedVersion
  *       401:
  *         description: Access token is missing or invalid
  *       403:
@@ -384,11 +387,13 @@ router.patch(
  *           type: string
  *         description: Warehouse ID
  *     requestBody:
- *       required: false
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - expectedVersion
  *             properties:
  *               expectedVersion:
  *                 type: integer
@@ -400,7 +405,7 @@ router.patch(
  *       200:
  *         description: Warehouse deactivated successfully
  *       400:
- *         description: Invalid warehouse ID
+ *         description: Validation failed, including a missing or invalid expectedVersion
  *       401:
  *         description: Access token is missing or invalid
  *       403:

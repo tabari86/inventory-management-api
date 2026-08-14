@@ -485,14 +485,27 @@ describe("Swagger/OpenAPI specification", () => {
     expect(schema.type).toBe(type);
   });
 
-  it("documents product bulk deletion with an ids array", () => {
+  it("documents product bulk archive with ordered version-bearing items", () => {
     const schema =
       swaggerSpec.paths["/api/v1/products/bulk"].delete.requestBody.content[
         "application/json"
       ].schema;
 
-    expect(schema.required).toContain("ids");
-    expect(schema.properties.ids.type).toBe("array");
+    expect(schema.required).toContain("items");
+    expect(schema.properties.ids).toBeUndefined();
+    expect(schema.properties.items).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 150,
+    });
+    expect(schema.properties.items.items.required).toEqual([
+      "id",
+      "expectedVersion",
+    ]);
+    expect(schema.properties.items.items.properties.expectedVersion).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
   });
 
   it("limits user creation roles to manager and viewer", () => {
@@ -516,6 +529,8 @@ describe("Swagger/OpenAPI specification", () => {
 
     expect(productSchema.minProperties).toBe(1);
     expect(warehouseSchema.minProperties).toBe(1);
+    expect(productSchema.required).toContain("expectedVersion");
+    expect(warehouseSchema.required).toContain("expectedVersion");
     expect(productSchema.properties.expectedVersion).toMatchObject({
       type: "integer",
       minimum: 1,
@@ -525,6 +540,41 @@ describe("Swagger/OpenAPI specification", () => {
       minimum: 1,
     });
     expect(warehouseSchema.properties.code).toBeUndefined();
+  });
+
+  it("requires expectedVersion for bulk updates and lifecycle commands", () => {
+    const productBulk =
+      swaggerSpec.paths["/api/v1/products/bulk"].patch.requestBody.content[
+        "application/json"
+      ].schema.items;
+    const warehouseBulk =
+      swaggerSpec.paths["/api/v1/warehouses/bulk"].patch.requestBody.content[
+        "application/json"
+      ].schema.items;
+
+    expect(productBulk.required).toContain("expectedVersion");
+    expect(warehouseBulk.required).toContain("expectedVersion");
+
+    for (const [path, method] of [
+      ["/api/v1/products/{id}/deactivate", "patch"],
+      ["/api/v1/products/{id}", "delete"],
+      ["/api/v1/warehouses/{id}/deactivate", "patch"],
+    ]) {
+      const operation = swaggerSpec.paths[path][method];
+      const schema = operation.requestBody.content["application/json"].schema;
+      expect(operation.requestBody.required).toBe(true);
+      expect(schema.required).toContain("expectedVersion");
+      expect(schema.properties.expectedVersion).toMatchObject({
+        type: "integer",
+        minimum: 1,
+      });
+      expect(operation.responses["400"].description).toContain(
+        "expectedVersion"
+      );
+      expect(operation.responses["409"].description.toLowerCase()).toContain(
+        "version"
+      );
+    }
   });
 
   it("marks legacy Product DELETE operations as deprecated archive aliases", () => {

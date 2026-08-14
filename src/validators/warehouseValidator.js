@@ -87,7 +87,9 @@ const updateWarehouseValidation = [
     .withMessage("Invalid warehouse status"),
 
   body("expectedVersion")
-    .optional()
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
     .isInt({ min: 1 })
     .withMessage("Expected version must be a positive integer")
     .toInt(),
@@ -149,7 +151,9 @@ const createBulkWarehousesValidation = [
 
 const deactivateWarehouseValidation = [
   body("expectedVersion")
-    .optional()
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
     .isInt({ min: 1 })
     .withMessage("Expected version must be a positive integer")
     .toInt(),
@@ -221,7 +225,9 @@ const updateBulkWarehousesValidation = [
     .withMessage("Invalid warehouse status"),
 
   body("*.expectedVersion")
-    .optional()
+    .exists()
+    .withMessage("Expected version is required")
+    .bail()
     .isInt({ min: 1 })
     .withMessage("Expected version must be a positive integer")
     .toInt(),
