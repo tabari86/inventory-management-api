@@ -122,7 +122,6 @@ const outboxEventSchema = new mongoose.Schema(
   {
     autoIndex: false,
     strict: "throw",
-    timestamps: true,
   }
 );
 
@@ -222,6 +221,9 @@ const validateOutboxUpdate = (update) => {
 };
 
 const protectOutboxEnvelope = function protectOutboxEnvelope() {
+  if (this.getOptions().upsert) {
+    throw new Error("OutboxEvent update upserts are prohibited");
+  }
   validateOutboxUpdate(this.getUpdate());
 };
 
@@ -237,6 +239,9 @@ outboxEventSchema.pre(
 );
 outboxEventSchema.pre("bulkWrite", function protectOutboxBulkWrite(operations) {
   for (const operation of operations || []) {
+    if (operation.updateOne?.upsert || operation.updateMany?.upsert) {
+      throw new Error("OutboxEvent update upserts are prohibited");
+    }
     if (operation.updateOne) validateOutboxUpdate(operation.updateOne.update);
     if (operation.updateMany) validateOutboxUpdate(operation.updateMany.update);
     if (operation.replaceOne) {
@@ -244,6 +249,9 @@ outboxEventSchema.pre("bulkWrite", function protectOutboxBulkWrite(operations) {
     }
   }
 });
+
+// Inspect caller updates before Mongoose rewrites immutable timestamp paths.
+outboxEventSchema.set("timestamps", true);
 
 outboxEventSchema.index(
   { eventId: 1 },

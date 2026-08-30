@@ -43,6 +43,40 @@ const buildRecord = (overrides = {}) => {
   };
 };
 
+const immutableEventSnapshot = (record) => ({
+  createdAt: record.createdAt,
+  eventId: record.eventId,
+  eventType: record.eventType,
+  eventVersion: record.eventVersion,
+  payloadSchemaVersion: record.payloadSchemaVersion,
+  producer: record.producer,
+  aggregate: record.aggregate,
+  payload: record.payload,
+  payloadSizeBytes: record.payloadSizeBytes,
+  occurredAt: record.occurredAt,
+  requestId: record.requestId,
+  correlationId: record.correlationId,
+  causationId: record.causationId,
+  source: record.source,
+  idempotency: record.idempotency,
+});
+
+const buildDistinctRecord = (suffix) => {
+  const record = buildRecord();
+  const productId = `64b64c6f2f0f000000000${String(suffix).padStart(3, "0")}`;
+  record.aggregate = { ...record.aggregate, id: productId };
+  record.payload = {
+    ...record.payload,
+    productId,
+    sku: `OUTBOX-${suffix}`,
+  };
+  record.payloadSizeBytes = Buffer.byteLength(canonicalize(record.payload), "utf8");
+  return record;
+};
+
+const waitForTimestampTick = () =>
+  new Promise((resolve) => setTimeout(resolve, 5));
+
 describe("OutboxEvent model", () => {
   it("declares exact non-TTL indexes with automatic indexing disabled", () => {
     expect(OutboxEvent.schema.options.autoIndex).toBe(false);
@@ -136,12 +170,25 @@ describe("OutboxEvent model", () => {
     record.eventType = "catalog.product.updated";
     record.payload = { altered: true };
     await expect(record.save()).rejects.toThrow("immutable");
-    await expect(
-      OutboxEvent.updateOne(
-        { _id: record._id },
-        { $set: { "aggregate.version": 2 } }
-      )
-    ).rejects.toThrow("immutable");
+    const blockedUpdates = [
+      { $set: { eventId: randomUUID() } },
+      { $set: { eventType: "catalog.product.updated" } },
+      { $set: { payload: { altered: true } } },
+      { $set: { "aggregate.version": 2 } },
+      { $set: { requestId: "tampered-request" } },
+      { $set: { occurredAt: new Date(0) } },
+      {
+        $set: {
+          idempotency: { recordId: "tampered", keyHash: "a".repeat(64) },
+        },
+      },
+      { $set: { payloadSizeBytes: 2 } },
+    ];
+    for (const update of blockedUpdates) {
+      await expect(
+        OutboxEvent.updateOne({ _id: record._id }, update)
+      ).rejects.toThrow("immutable");
+    }
     await expect(
       OutboxEvent.updateOne(
         { _id: record._id },
@@ -149,6 +196,13 @@ describe("OutboxEvent model", () => {
         { updatePipeline: true }
       )
     ).rejects.toThrow("immutable");
+    await expect(
+      OutboxEvent.updateOne(
+        { _id: record._id },
+        [{ $project: { delivery: 1 } }],
+        { updatePipeline: true }
+      )
+    ).rejects.toThrow("pipeline is not supported");
     await expect(
       OutboxEvent.bulkWrite([
         {
@@ -163,6 +217,214 @@ describe("OutboxEvent model", () => {
     expect(stored.eventType).toBe("catalog.product.created");
     expect(stored.requestId).not.toBe("pipeline-tamper");
     expect(stored.payload).toMatchObject({ sku: "OUTBOX-1" });
+  });
+
+  it("allows a validated delivery-only update with automatic timestamps", async () => {
+    const created = await OutboxEvent.create(buildRecord());
+    const before = await OutboxEvent.findById(created._id).lean();
+    await waitForTimestampTick();
+
+    const result = await OutboxEvent.updateOne(
+      { _id: created._id },
+      { $set: { "delivery.lastError": "diagnostic" } },
+      { runValidators: true }
+    );
+
+    expect(result.matchedCount).toBe(1);
+    expect(result.modifiedCount).toBe(1);
+    const after = await OutboxEvent.findById(created._id).lean();
+    expect(after.delivery).toEqual({
+      ...before.delivery,
+      lastError: "diagnostic",
+    });
+    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    expect(immutableEventSnapshot(after)).toEqual(immutableEventSnapshot(before));
+  });
+
+  it("allows delivery-only updateMany with automatic timestamps", async () => {
+    const created = await OutboxEvent.create([
+      buildDistinctRecord(2),
+      buildDistinctRecord(3),
+    ]);
+    const ids = created.map((record) => record._id);
+    const before = await OutboxEvent.find({ _id: { $in: ids } }).lean();
+    await waitForTimestampTick();
+
+    const result = await OutboxEvent.updateMany(
+      { _id: { $in: ids } },
+      { $set: { "delivery.lastError": "batch-diagnostic" } },
+      { runValidators: true }
+    );
+
+    expect(result.matchedCount).toBe(2);
+    expect(result.modifiedCount).toBe(2);
+    const after = await OutboxEvent.find({ _id: { $in: ids } }).lean();
+    const beforeById = new Map(before.map((record) => [String(record._id), record]));
+    for (const record of after) {
+      const original = beforeById.get(String(record._id));
+      expect(record.delivery).toEqual({
+        ...original.delivery,
+        lastError: "batch-diagnostic",
+      });
+      expect(record.updatedAt.getTime()).toBeGreaterThan(original.updatedAt.getTime());
+      expect(immutableEventSnapshot(record)).toEqual(
+        immutableEventSnapshot(original)
+      );
+    }
+  });
+
+  it("allows delivery-only findOneAndUpdate with automatic timestamps", async () => {
+    const created = await OutboxEvent.create(buildDistinctRecord(4));
+    const before = await OutboxEvent.findById(created._id).lean();
+    await waitForTimestampTick();
+
+    const returned = await OutboxEvent.findOneAndUpdate(
+      { _id: created._id },
+      { $set: { "delivery.lastError": "find-diagnostic" } },
+      { returnDocument: "after", runValidators: true }
+    ).lean();
+
+    expect(returned.delivery.lastError).toBe("find-diagnostic");
+    expect(returned.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    expect(immutableEventSnapshot(returned)).toEqual(
+      immutableEventSnapshot(before)
+    );
+  });
+
+  it("allows delivery-only bulkWrite updateOne with automatic timestamps", async () => {
+    const created = await OutboxEvent.create(buildDistinctRecord(5));
+    const before = await OutboxEvent.findById(created._id).lean();
+    await waitForTimestampTick();
+
+    const result = await OutboxEvent.bulkWrite([
+      {
+        updateOne: {
+          filter: { _id: created._id },
+          update: { $set: { "delivery.lastError": "bulk-diagnostic" } },
+        },
+      },
+    ]);
+
+    expect(result.matchedCount).toBe(1);
+    expect(result.modifiedCount).toBe(1);
+    const after = await OutboxEvent.findById(created._id).lean();
+    expect(after.delivery).toEqual({
+      ...before.delivery,
+      lastError: "bulk-diagnostic",
+    });
+    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    expect(immutableEventSnapshot(after)).toEqual(immutableEventSnapshot(before));
+  });
+
+  it("explicitly rejects delivery update upserts", async () => {
+  const updateOneEventId = randomUUID();
+  const findOneEventId = randomUUID();
+  const bulkUpdateOneEventId = randomUUID();
+  const bulkUpdateManyEventId = randomUUID();
+
+  await expect(
+    OutboxEvent.updateOne(
+      { eventId: updateOneEventId },
+      { $set: { "delivery.lastError": "upsert-attempt" } },
+      { runValidators: true, upsert: true }
+    )
+  ).rejects.toThrow("update upserts are prohibited");
+
+  await expect(
+    OutboxEvent.findOneAndUpdate(
+      { eventId: findOneEventId },
+      { $set: { "delivery.lastError": "upsert-attempt" } },
+      { runValidators: true, upsert: true }
+    )
+  ).rejects.toThrow("update upserts are prohibited");
+
+  await expect(
+    OutboxEvent.bulkWrite([
+      {
+        updateOne: {
+          filter: { eventId: bulkUpdateOneEventId },
+          update: { $set: { "delivery.lastError": "upsert-attempt" } },
+          upsert: true,
+        },
+      },
+    ])
+  ).rejects.toThrow("update upserts are prohibited");
+
+  await expect(
+    OutboxEvent.bulkWrite([
+      {
+        updateMany: {
+          filter: { eventId: bulkUpdateManyEventId },
+          update: { $set: { "delivery.lastError": "upsert-attempt" } },
+          upsert: true,
+        },
+      },
+    ])
+  ).rejects.toThrow("update upserts are prohibited");
+
+  expect(
+    await OutboxEvent.countDocuments({
+      eventId: {
+        $in: [
+          updateOneEventId,
+          findOneEventId,
+          bulkUpdateOneEventId,
+          bulkUpdateManyEventId,
+        ],
+      },
+    })
+  ).toBe(0);
+  });
+
+  it("blocks caller-controlled createdAt mutation paths", async () => {
+    const created = await OutboxEvent.create(buildDistinctRecord(6));
+    const before = await OutboxEvent.findById(created._id).lean();
+    const tamperedCreatedAt = new Date(0);
+
+    await expect(
+      OutboxEvent.updateOne(
+        { _id: created._id },
+        { $set: { createdAt: tamperedCreatedAt } }
+      )
+    ).rejects.toThrow("immutable");
+    await expect(
+      OutboxEvent.updateOne(
+        { _id: created._id },
+        { createdAt: tamperedCreatedAt }
+      )
+    ).rejects.toThrow("immutable");
+    await expect(
+      OutboxEvent.updateOne(
+        { _id: created._id },
+        [{ $set: { createdAt: tamperedCreatedAt } }],
+        { updatePipeline: true }
+      )
+    ).rejects.toThrow("immutable");
+    await expect(
+      OutboxEvent.replaceOne(
+        { _id: created._id },
+        { ...before, createdAt: tamperedCreatedAt }
+      )
+    ).rejects.toThrow("immutable");
+    await expect(
+      OutboxEvent.findOneAndReplace(
+        { _id: created._id },
+        { ...before, createdAt: tamperedCreatedAt }
+      )
+    ).rejects.toThrow("immutable");
+    await expect(
+      OutboxEvent.bulkWrite([
+        {
+          updateOne: {
+            filter: { _id: created._id },
+            update: { $set: { createdAt: tamperedCreatedAt } },
+          },
+        },
+      ])
+    ).rejects.toThrow("immutable");
+
+    const after = await OutboxEvent.findById(created._id).lean();
+    expect(after.createdAt).toEqual(before.createdAt);
   });
 
   it("rejects a registered event bound to the wrong aggregate type", async () => {
