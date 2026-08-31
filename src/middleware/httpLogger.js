@@ -1,5 +1,7 @@
 const { performance } = require("perf_hooks");
 
+const UNRESOLVED_REQUEST_PATH = "/unresolved";
+
 const safeRequestPath = (req) => {
   if (req.route?.path) {
     const routePath = Array.isArray(req.route.path)
@@ -8,12 +10,7 @@ const safeRequestPath = (req) => {
     return `${req.baseUrl || ""}${routePath}` || "/";
   }
 
-  try {
-    return new URL(req.originalUrl || req.url || "/", "http://localhost")
-      .pathname;
-  } catch (_error) {
-    return "/";
-  }
+  return UNRESOLVED_REQUEST_PATH;
 };
 
 const createHttpLogger = ({ logger, now = () => performance.now() }) =>

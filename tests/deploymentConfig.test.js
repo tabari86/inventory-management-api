@@ -64,11 +64,17 @@ describe("Deployment configuration", () => {
     expect(dockerfile).toContain("USER node");
   });
 
-  it("keeps existing Render and Compose liveness paths compatible", () => {
+  it("uses dependency readiness for Render while retaining Compose liveness", () => {
     const render = readRepositoryFile("render.yaml");
     const compose = readRepositoryFile("docker-compose.yml");
+    const renderHealthCheckPath = render.match(
+      /^\s*healthCheckPath:\s*(\S+)\s*$/m
+    )?.[1];
+    const composeHealthCheckUrl = compose.match(
+      /http:\/\/localhost:3000\/[^"\s]+/
+    )?.[0];
 
-    expect(render).toContain("healthCheckPath: /health");
-    expect(compose).toContain("http://localhost:3000/health");
+    expect(renderHealthCheckPath).toBe("/health/ready");
+    expect(composeHealthCheckUrl).toBe("http://localhost:3000/health");
   });
 });

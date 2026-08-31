@@ -1,7 +1,9 @@
 const { EventEmitter } = require("events");
 const pino = require("pino");
+const request = require("supertest");
 
 const { createLogger } = require("../src/config/logger");
+const { createApp } = require("../src/app");
 const { createHttpLogger } = require("../src/middleware/httpLogger");
 
 const createCapture = () => {
@@ -17,6 +19,45 @@ const createCapture = () => {
 };
 
 describe("Structured logging", () => {
+  it("does not log client-controlled path segments for unmatched requests", async () => {
+    const { output, destination } = createCapture();
+    const logger = createLogger({
+      destination,
+      environment: "production",
+      level: "info",
+    });
+
+    const response = await request(createApp({ logger }))
+      .get("/api/v1/nonexistent/PATH_SECRET_V601?token=QUERY_SECRET_V601")
+      .set("Authorization", "Bearer AUTH_SECRET_V601")
+      .set("Idempotency-Key", "IDEMPOTENCY_SECRET_V601");
+    logger.flush();
+
+    const records = output.flatMap((chunk) =>
+      chunk
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(JSON.parse)
+    );
+    const terminalRecords = records.filter((record) =>
+      ["http_request_completed", "http_request_aborted"].includes(record.event)
+    );
+
+    expect(terminalRecords).toHaveLength(1);
+    expect(terminalRecords[0]).toMatchObject({
+      event: "http_request_completed",
+      requestId: expect.any(String),
+      correlationId: expect.any(String),
+      method: "GET",
+      statusCode: 404,
+    });
+    expect(output.join("")).not.toContain("PATH_SECRET_V601");
+    expect(output.join("")).not.toContain("QUERY_SECRET_V601");
+    expect(output.join("")).not.toContain("AUTH_SECRET_V601");
+    expect(output.join("")).not.toContain("IDEMPOTENCY_SECRET_V601");
+  });
+
   it("writes machine-parseable allowlisted JSON and excludes nested secrets", () => {
     const { output, destination } = createCapture();
     const logger = createLogger({
