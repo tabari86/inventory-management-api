@@ -5,6 +5,7 @@ const request = require("supertest");
 const { createLogger } = require("../src/config/logger");
 const { createApp } = require("../src/app");
 const { createHttpLogger } = require("../src/middleware/httpLogger");
+const authService = require("../src/services/authService");
 
 const createCapture = () => {
   const output = [];
@@ -56,6 +57,101 @@ describe("Structured logging", () => {
     expect(output.join("")).not.toContain("QUERY_SECRET_V601");
     expect(output.join("")).not.toContain("AUTH_SECRET_V601");
     expect(output.join("")).not.toContain("IDEMPOTENCY_SECRET_V601");
+  });
+
+  it("preserves full safe route context for propagated errors", async () => {
+    const { output, destination } = createCapture();
+    const logger = createLogger({
+      destination,
+      environment: "production",
+      level: "info",
+    });
+    const app = createApp({ logger });
+    const originalEnvironment = process.env.NODE_ENV;
+    const failureMarker = "ROUTE_CONTEXT_FAILURE_V604";
+    const loginPassword = ["test", "fixture"].join("-");
+    const loginSpy = jest
+      .spyOn(authService, "login")
+      .mockRejectedValue(new Error(failureMarker));
+    let v1Response;
+    let legacyResponse;
+    let unmatchedResponse;
+
+    try {
+      process.env.NODE_ENV = "production";
+      v1Response = await request(app)
+        .post("/api/v1/auth/login")
+        .set("X-Request-ID", "v604-v1-request")
+        .set("X-Correlation-ID", "v604-v1-correlation")
+        .send({ email: "v604-v1@example.test", password: loginPassword });
+      legacyResponse = await request(app)
+        .post("/api/auth/login")
+        .set("X-Request-ID", "v604-legacy-request")
+        .set("X-Correlation-ID", "v604-legacy-correlation")
+        .send({ email: "v604-legacy@example.test", password: loginPassword });
+      unmatchedResponse = await request(app).get(
+        "/api/v1/nonexistent/PATH_SECRET_V604?token=QUERY_SECRET_V604"
+      );
+    } finally {
+      loginSpy.mockRestore();
+      process.env.NODE_ENV = originalEnvironment;
+    }
+    logger.flush();
+
+    const rawOutput = output.join("");
+    const records = output.flatMap((chunk) =>
+      chunk
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(JSON.parse)
+    );
+    const terminalRecords = records.filter(
+      ({ event }) => event === "http_request_completed"
+    );
+    const findRecord = (event, requestId) =>
+      records.find(
+        (record) => record.event === event && record.requestId === requestId
+      );
+    const v1Terminal = findRecord("http_request_completed", "v604-v1-request");
+    const legacyTerminal = findRecord(
+      "http_request_completed",
+      "v604-legacy-request"
+    );
+    const unmatchedTerminal = terminalRecords.find(
+      ({ statusCode }) => statusCode === unmatchedResponse.statusCode
+    );
+
+    expect([v1Terminal.path, legacyTerminal.path]).toEqual([
+      "/api/v1/auth/login",
+      "/api/auth/login",
+    ]);
+    expect(unmatchedTerminal.path).toBe("/unresolved");
+    expect(v1Response.statusCode).toBe(500);
+    expect(v1Response.body).toMatchObject({
+      status: 500,
+      code: "INTERNAL_ERROR",
+      detail: "An unexpected error occurred",
+      requestId: "v604-v1-request",
+      correlationId: "v604-v1-correlation",
+      retryable: false,
+    });
+    expect(legacyResponse.statusCode).toBe(500);
+    expect(legacyResponse.body).toEqual({ message: "Internal server error" });
+    for (const requestId of ["v604-v1-request", "v604-legacy-request"]) {
+      const terminal = findRecord("http_request_completed", requestId);
+      const applicationError = findRecord("application_error", requestId);
+      expect(applicationError).toMatchObject({
+        requestId: terminal.requestId,
+        correlationId: terminal.correlationId,
+        statusCode: terminal.statusCode,
+        errorCode: terminal.errorCode,
+        retryable: terminal.retryable,
+      });
+    }
+    expect(rawOutput).not.toContain(failureMarker);
+    expect(rawOutput).not.toContain("PATH_SECRET_V604");
+    expect(rawOutput).not.toContain("QUERY_SECRET_V604");
   });
 
   it("writes machine-parseable allowlisted JSON and excludes nested secrets", () => {

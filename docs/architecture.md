@@ -625,8 +625,8 @@ local topology; it retains the same production-built image, a persistent MongoDB
 8 single-node replica set, health checks, and an explicit seed profile. This
 keeps local placeholders usable without weakening production validation.
 Render remains the production topology: the platform injects MongoDB and JWT
-secrets, the service starts with `NODE_ENV=production`, and `/health` is the
-configured liveness path.
+secrets, the service starts with `NODE_ENV=production`, and `/health/ready` is
+the configured dependency-readiness path.
 
 GitHub Actions has read-only repository permissions and no application,
 database, or deployment credentials. Its gates are deterministic install,

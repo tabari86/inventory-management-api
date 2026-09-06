@@ -1,7 +1,53 @@
+const mongoose = require("mongoose");
+
 const DomainError = require("../errors/DomainError");
-const { logger: defaultLogger } = require("../config/logger");
+const {
+  FAILURE_CLASSES,
+  logger: defaultLogger,
+} = require("../config/logger");
 const errorCodes = require("../errors/errorCodes");
 const { sendError } = require("../http/contract");
+
+const MAX_ERROR_CAUSE_DEPTH = 5;
+const DATABASE_OPERATIONAL_ERROR_TYPES = Object.freeze([
+  mongoose.mongo.MongoClientClosedError,
+  mongoose.mongo.MongoNetworkError,
+  mongoose.mongo.MongoNotConnectedError,
+  mongoose.mongo.MongoOperationTimeoutError,
+  mongoose.mongo.MongoServerClosedError,
+  mongoose.mongo.MongoServerSelectionError,
+  mongoose.mongo.MongoTopologyClosedError,
+]);
+
+const classifyInternalFailure = (error, code) => {
+  if (code !== errorCodes.INTERNAL_ERROR) return undefined;
+
+  const seen = new Set();
+  let current = error;
+  for (
+    let depth = 0;
+    current instanceof Error &&
+    depth < MAX_ERROR_CAUSE_DEPTH &&
+    !seen.has(current);
+    depth += 1
+  ) {
+    if (
+      DATABASE_OPERATIONAL_ERROR_TYPES.some(
+        (ErrorType) => current instanceof ErrorType
+      )
+    ) {
+      return FAILURE_CLASSES.DATABASE;
+    }
+    seen.add(current);
+    try {
+      current = current.cause;
+    } catch (_causeAccessError) {
+      break;
+    }
+  }
+
+  return FAILURE_CLASSES.APPLICATION;
+};
 
 const createErrorHandler = (logger = defaultLogger) =>
   function errorHandler(error, req, res, _next) {
@@ -28,6 +74,7 @@ const createErrorHandler = (logger = defaultLogger) =>
       statusCode,
       retryable: isDomainError ? error.retryable : false,
     };
+    const failureClass = classifyInternalFailure(error, applicationError.code);
 
     res.locals ||= {};
     res.locals.applicationError = applicationError;
@@ -37,6 +84,7 @@ const createErrorHandler = (logger = defaultLogger) =>
       statusCode: applicationError.statusCode,
       errorCode: applicationError.code,
       retryable: applicationError.retryable,
+      ...(failureClass ? { failureClass } : {}),
     });
 
     const legacyMessage = hideInternalDetails

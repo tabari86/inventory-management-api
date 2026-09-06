@@ -390,9 +390,10 @@ context validation, and standard-output logging only. It adds no model, schema,
 index, collection, backfill, or production data change, and no migration is
 required.
 
-Render remains compatible with the existing `healthCheckPath: /health` setting;
-that path is the legacy liveness alias and does not depend on MongoDB. The
-canonical liveness path is `/health/live`. Canonical readiness is
+Render is configured with `healthCheckPath: /health/ready`, so its platform
+health check evaluates dependency-aware readiness. `/health` remains the legacy
+liveness alias and does not depend on MongoDB. The canonical liveness path is
+`/health/live`. Canonical readiness is
 `/health/ready`, while `/api/ready` is a compatibility readiness alias added by
 WP6. Readiness depends on completed startup, an active Mongoose connection,
 accepted traffic, and shutdown not having started.
@@ -419,8 +420,6 @@ user profile fields, and production stack traces.
 
 ### Remaining operational limits
 
-- Render still checks `/health`, which is liveness rather than readiness, so
-  the platform health check does not directly evaluate MongoDB readiness.
 - Signal handlers are registered after startup succeeds. A termination signal
   during the database connection or retry window does not use the normal
   graceful-shutdown orchestrator.

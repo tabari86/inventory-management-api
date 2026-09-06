@@ -1,13 +1,37 @@
 const { performance } = require("perf_hooks");
 
+const {
+  API_CONTRACT_LEGACY,
+  API_CONTRACT_V1,
+} = require("../http/contract");
+
 const UNRESOLVED_REQUEST_PATH = "/unresolved";
+const SAFE_ROUTE_BASE = Symbol("safeRouteBase");
+const SAFE_STATIC_MOUNT_PATTERN = /^\/[a-z0-9-]+$/;
+const API_BASE_PATHS = Object.freeze({
+  [API_CONTRACT_V1]: "/api/v1",
+  [API_CONTRACT_LEGACY]: "/api",
+});
+
+const createRouteMountContext = (mountPath) => {
+  if (!SAFE_STATIC_MOUNT_PATTERN.test(mountPath)) {
+    throw new TypeError("Route mount path must be a safe static path");
+  }
+
+  return function routeMountContext(req, _res, next) {
+    const apiBasePath = API_BASE_PATHS[req.apiContractVersion];
+    if (apiBasePath) req[SAFE_ROUTE_BASE] = `${apiBasePath}${mountPath}`;
+    return next();
+  };
+};
 
 const safeRequestPath = (req) => {
   if (req.route?.path) {
     const routePath = Array.isArray(req.route.path)
       ? req.route.path[0]
       : req.route.path;
-    return `${req.baseUrl || ""}${routePath}` || "/";
+    const routeBase = req[SAFE_ROUTE_BASE] || req.baseUrl || "";
+    return `${routeBase}${routePath}` || "/";
   }
 
   return UNRESOLVED_REQUEST_PATH;
@@ -52,5 +76,6 @@ const createHttpLogger = ({ logger, now = () => performance.now() }) =>
 
 module.exports = {
   createHttpLogger,
+  createRouteMountContext,
   safeRequestPath,
 };

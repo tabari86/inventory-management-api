@@ -1,6 +1,11 @@
 const pino = require("pino");
 
 const SERVICE_NAME = "inventory-management-api";
+const FAILURE_CLASSES = Object.freeze({
+  APPLICATION: "APPLICATION",
+  DATABASE: "DATABASE",
+});
+const SAFE_FAILURE_CLASSES = Object.freeze(Object.values(FAILURE_CLASSES));
 const SAFE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const SAFE_CODE_PATTERN = /^[A-Z0-9_]{1,64}$/;
 const SAFE_METHOD_PATTERN = /^[A-Z]{1,16}$/;
@@ -96,6 +101,7 @@ const EVENT_DEFINITIONS = Object.freeze({
       "statusCode",
       "errorCode",
       "retryable",
+      "failureClass",
     ],
   },
 });
@@ -163,6 +169,8 @@ const sanitizeField = (field, value) => {
       return safeString(value, SAFE_SIGNAL_PATTERN);
     case "errorCode":
       return safeString(value, SAFE_CODE_PATTERN);
+    case "failureClass":
+      return SAFE_FAILURE_CLASSES.includes(value) ? value : undefined;
     case "port":
     case "statusCode":
     case "attempt":
@@ -248,6 +256,7 @@ const logger = createLogger();
 
 module.exports = {
   EVENT_DEFINITIONS,
+  FAILURE_CLASSES,
   SERVICE_NAME,
   createLogger,
   logger,

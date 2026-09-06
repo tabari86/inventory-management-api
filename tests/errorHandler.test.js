@@ -1,7 +1,22 @@
+const mongoose = require("mongoose");
+
+const { createLogger } = require("../src/config/logger");
 const DomainError = require("../src/errors/DomainError");
 const errorCodes = require("../src/errors/errorCodes");
 const errorHandler = require("../src/middleware/errorHandler");
 const { createErrorHandler } = require("../src/middleware/errorHandler");
+
+const createCapture = () => {
+  const output = [];
+  return {
+    output,
+    destination: {
+      write(chunk) {
+        output.push(String(chunk));
+      },
+    },
+  };
+};
 
 describe("Global error handler", () => {
   const originalNodeEnv = process.env.NODE_ENV;
@@ -132,5 +147,135 @@ describe("Global error handler", () => {
     expect(response.json).toHaveBeenCalledWith({
       message: "Internal server error",
     });
+  });
+
+  it("safely distinguishes database operational failures from application failures", () => {
+    process.env.NODE_ENV = "production";
+    const { output, destination } = createCapture();
+    const logger = createLogger({
+      destination,
+      environment: "production",
+      level: "info",
+    });
+    const handler = createErrorHandler(logger);
+    const privateUri = [
+      "mongodb://user",
+      "password@private-host.invalid/database",
+    ].join(":");
+    const databaseFailure = new mongoose.mongo.MongoNetworkError(
+      [
+        "DATABASE_SECRET_V605",
+        privateUri,
+        "DATABASE_PASSWORD_V605@DATABASE_HOST_V605",
+        "DATABASE_TOKEN_V605",
+        "STACK_SECRET_V605",
+      ].join(":")
+    );
+    const applicationFailure = new Error(
+      "APPLICATION_SECRET_V605 STACK_SECRET_V605"
+    );
+    const cyclicApplicationFailure = new Error("CYCLE_SECRET_V605");
+    cyclicApplicationFailure.cause = cyclicApplicationFailure;
+    const validationFailure = new mongoose.Error.ValidationError();
+    const castFailure = new mongoose.Error.CastError(
+      "ObjectId",
+      "private-cast-value",
+      "id"
+    );
+    const internalError = (cause) =>
+      new DomainError({
+        code: errorCodes.INTERNAL_ERROR,
+        httpStatus: 500,
+        message: "Could not complete operation",
+        cause,
+      });
+    const failureCases = [
+      ["v605-direct-database", databaseFailure, "DATABASE"],
+      ["v605-wrapped-database", internalError(databaseFailure), "DATABASE"],
+      ["v605-direct-application", applicationFailure, "APPLICATION"],
+      ["v605-wrapped-application", internalError(applicationFailure), "APPLICATION"],
+      ["v605-cyclic-application", cyclicApplicationFailure, "APPLICATION"],
+      ["v605-mongoose-validation", validationFailure, "APPLICATION"],
+      ["v605-mongoose-cast", castFailure, "APPLICATION"],
+    ];
+    const typedCases = [
+      ["v605-domain-stock", errorCodes.INSUFFICIENT_STOCK, 409, databaseFailure],
+      ["v605-domain-missing", errorCodes.RESOURCE_NOT_FOUND, 404, databaseFailure],
+      ["v605-domain-stale", errorCodes.STALE_VERSION, 409, databaseFailure],
+      ["v605-domain-validation", errorCodes.VALIDATION_FAILED, 400, validationFailure],
+    ];
+    const emit = (requestId, error) =>
+      handler(
+        error,
+        {
+          applicationContext: {
+            requestId,
+            correlationId: `${requestId}-correlation`,
+          },
+        },
+        createResponse(),
+        jest.fn()
+      );
+    for (const [requestId, error] of failureCases) emit(requestId, error);
+    for (const [requestId, code, httpStatus, cause] of typedCases) {
+      emit(
+        requestId,
+        new DomainError({
+          code,
+          httpStatus,
+          message: "Safe typed failure",
+          cause,
+        })
+      );
+    }
+    logger.log("application_error", {
+      requestId: "v605-invalid-class",
+      correlationId: "v605-invalid-class-correlation",
+      statusCode: 500,
+      errorCode: errorCodes.INTERNAL_ERROR,
+      retryable: false,
+      failureClass: "UNBOUNDED_FAILURE_CLASS_V605",
+    });
+    logger.flush();
+
+    const rawOutput = output.join("");
+    const records = rawOutput
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map(JSON.parse);
+    for (const [requestId, _error, failureClass] of failureCases) {
+      expect(
+        records.find((record) => record.requestId === requestId)
+      ).toMatchObject({
+        event: "application_error",
+        requestId,
+        correlationId: `${requestId}-correlation`,
+        statusCode: 500,
+        errorCode: errorCodes.INTERNAL_ERROR,
+        retryable: false,
+        failureClass,
+      });
+    }
+    for (const [requestId] of typedCases) {
+      expect(
+        records.find((record) => record.requestId === requestId)
+      ).not.toHaveProperty("failureClass");
+    }
+    expect(
+      records.find(({ requestId }) => requestId === "v605-invalid-class")
+    ).not.toHaveProperty("failureClass");
+    for (const marker of [
+      "DATABASE_SECRET_V605",
+      "APPLICATION_SECRET_V605",
+      privateUri,
+      "DATABASE_PASSWORD_V605",
+      "DATABASE_HOST_V605",
+      "DATABASE_TOKEN_V605",
+      "STACK_SECRET_V605",
+      "CYCLE_SECRET_V605",
+      "UNBOUNDED_FAILURE_CLASS_V605",
+    ]) {
+      expect(rawOutput).not.toContain(marker);
+    }
   });
 });
