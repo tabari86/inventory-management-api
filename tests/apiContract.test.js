@@ -123,6 +123,16 @@ describe("WP7 API routing and HTTP contracts", () => {
     expectV1Error(versionedReady, 404, "RESOURCE_NOT_FOUND");
   });
 
+  it("uses the legacy JSON error contract for unmatched API routes", async () => {
+    const response = await request(app).get("/api/not-a-route");
+
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toMatch(/^application\/json\b/);
+    expect(response.headers["content-type"]).not.toMatch(/^text\/html\b/);
+    expect(response.body).toEqual({ message: "API route not found" });
+    expect(response.text).not.toContain("<!DOCTYPE html>");
+  });
+
   it("uses exact v1 success envelopes for single, mutation, and message-only responses", async () => {
     const managerToken = await createManagerToken();
     const created = await request(app)

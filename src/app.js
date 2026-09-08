@@ -71,6 +71,13 @@ const createApp = ({
   );
 
   app.use("/api", setApiContractVersion(API_CONTRACT_LEGACY), apiRouter);
+  app.use("/api", (req, res) =>
+    sendError(req, res, {
+      statusCode: 404,
+      code: errorCodes.RESOURCE_NOT_FOUND,
+      detail: "API route not found",
+    })
+  );
 
   app.use(createErrorHandler(logger));
 
