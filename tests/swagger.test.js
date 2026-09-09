@@ -686,6 +686,25 @@ describe("Swagger/OpenAPI specification", () => {
     ).toBeDefined();
   });
 
+  it.each([
+    ["/api/v1/goods-receipts", false],
+    ["/api/v1/goods-receipts/bulk", true],
+    ["/api/v1/goods-issues", false],
+    ["/api/v1/goods-issues/bulk", true],
+  ])("documents the safe-integer quantity maximum for %s", (path, bulk) => {
+    const bodySchema =
+      swaggerSpec.paths[path].post.requestBody.content["application/json"].schema;
+    const quantitySchema = bulk
+      ? bodySchema.items.properties.quantity
+      : bodySchema.properties.quantity;
+
+    expect(quantitySchema).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: Number.MAX_SAFE_INTEGER,
+    });
+  });
+
   it("defines pragmatic reusable response schemas", () => {
     expect(swaggerSpec.components.schemas).toEqual(
       expect.objectContaining({

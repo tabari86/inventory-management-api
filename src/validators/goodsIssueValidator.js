@@ -10,8 +10,8 @@ const createGoodsIssueValidation = [
   body("quantity")
     .notEmpty()
     .withMessage("Quantity is required")
-    .isInt({ min: 1 })
-    .withMessage("Quantity must be greater than 0")
+    .isInt({ min: 1, max: Number.MAX_SAFE_INTEGER })
+    .withMessage("Quantity must be a positive safe integer")
     .toInt(),
 
   body("reference")
@@ -49,8 +49,8 @@ const createBulkGoodsIssueValidation = [
     .notEmpty()
     .withMessage("Quantity is required")
     .bail()
-    .isInt({ min: 1 })
-    .withMessage("Quantity must be greater than 0")
+    .isInt({ min: 1, max: Number.MAX_SAFE_INTEGER })
+    .withMessage("Quantity must be a positive safe integer")
     .toInt(),
 
   body("*.reference")

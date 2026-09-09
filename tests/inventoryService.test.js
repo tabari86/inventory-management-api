@@ -62,8 +62,152 @@ describe("Inventory application service", () => {
 
     expect(result.stock.quantity).toBe(5);
     expect(result.stockMovement.type).toBe("GOODS_ISSUE");
-    expect((await Stock.findById(stock._id)).quantity).toBe(5);
+    expect(result.stockMovement.quantityBefore).toBe(8);
+    expect(result.stockMovement.quantityAfter).toBe(5);
+    expect(
+      result.stockMovement.quantityBefore - result.stockMovement.quantityAfter
+    ).toBe(result.stockMovement.quantity);
+    expect(
+      [
+        result.stockMovement.quantity,
+        result.stockMovement.quantityBefore,
+        result.stockMovement.quantityAfter,
+      ].every(Number.isSafeInteger)
+    ).toBe(true);
+    expect(await Stock.findById(stock._id)).toMatchObject({
+      quantity: 5,
+      version: 2,
+    });
     expect(await StockMovement.countDocuments()).toBe(1);
+  });
+
+  it("accepts a direct receipt whose result is exactly the safe maximum", async () => {
+    const stock = await createStock(0, "SAFE-MAXIMUM");
+
+    const result = await inventoryService.createGoodsReceipt({
+      stockId: stock._id.toString(),
+      quantity: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result.stock.quantity).toBe(Number.MAX_SAFE_INTEGER);
+    expect(result.stockMovement).toMatchObject({
+      quantity: Number.MAX_SAFE_INTEGER,
+      quantityBefore: 0,
+      quantityAfter: Number.MAX_SAFE_INTEGER,
+    });
+    expect(
+      result.stockMovement.quantityAfter - result.stockMovement.quantityBefore
+    ).toBe(result.stockMovement.quantity);
+    expect(
+      [
+        result.stockMovement.quantity,
+        result.stockMovement.quantityBefore,
+        result.stockMovement.quantityAfter,
+      ].every(Number.isSafeInteger)
+    ).toBe(true);
+    expect(await Stock.findById(stock._id)).toMatchObject({
+      quantity: Number.MAX_SAFE_INTEGER,
+      version: 2,
+    });
+    expect(await StockMovement.countDocuments()).toBe(1);
+  });
+
+  it.each(["createGoodsReceipt", "createGoodsIssue"])(
+    "rejects an unsafe direct quantity through %s",
+    async (operation) => {
+      const initialQuantity =
+        operation === "createGoodsIssue" ? Number.MAX_SAFE_INTEGER : 0;
+      const stock = await createStock(initialQuantity, `UNSAFE-${operation}`);
+
+      await expect(
+        inventoryService[operation]({
+          stockId: stock._id.toString(),
+          quantity: Number.MAX_SAFE_INTEGER + 1,
+        })
+      ).rejects.toMatchObject({
+        code: errorCodes.VALIDATION_FAILED,
+        httpStatus: 400,
+      });
+
+      expect(await Stock.findById(stock._id)).toMatchObject({
+        quantity: initialQuantity,
+        version: 1,
+      });
+      expect(await StockMovement.countDocuments()).toBe(0);
+    }
+  );
+
+  it("rejects a direct receipt whose resulting quantity would be unsafe", async () => {
+    const stock = await createStock(1, "RESULT-OVERFLOW");
+
+    await expect(
+      inventoryService.createGoodsReceipt({
+        stockId: stock._id.toString(),
+        quantity: Number.MAX_SAFE_INTEGER,
+      })
+    ).rejects.toMatchObject({
+      code: errorCodes.VALIDATION_FAILED,
+      httpStatus: 400,
+    });
+
+    expect(await Stock.findById(stock._id)).toMatchObject({
+      quantity: 1,
+      version: 1,
+    });
+    expect(await StockMovement.countDocuments()).toBe(0);
+  });
+
+  it.each([
+    ["receipt", "createGoodsReceiptsBulk", "receipts", 0],
+    ["issue", "createGoodsIssuesBulk", "issues", Number.MAX_SAFE_INTEGER],
+  ])(
+    "rejects unsafe same-stock bulk %s aggregation before mutation",
+    async (_type, operation, field, initialQuantity) => {
+      const stock = await createStock(initialQuantity, `BULK-${field}`);
+
+      await expect(
+        inventoryService[operation]({
+          [field]: [
+            { stockId: stock._id.toString(), quantity: Number.MAX_SAFE_INTEGER },
+            { stockId: stock._id.toString(), quantity: 1 },
+          ],
+        })
+      ).rejects.toMatchObject({
+        code: errorCodes.VALIDATION_FAILED,
+        httpStatus: 400,
+      });
+
+      expect(await Stock.findById(stock._id)).toMatchObject({
+        quantity: initialQuantity,
+        version: 1,
+      });
+      expect(await StockMovement.countDocuments()).toBe(0);
+    }
+  );
+
+  it("refuses further arithmetic on an already unsafe persisted Stock quantity", async () => {
+    const stock = await createStock(1, "UNSAFE-PERSISTED");
+    const unsafeQuantity = Number.MAX_SAFE_INTEGER + 1;
+    await Stock.collection.updateOne(
+      { _id: stock._id },
+      { $set: { quantity: unsafeQuantity } }
+    );
+
+    await expect(
+      inventoryService.createGoodsReceipt({
+        stockId: stock._id.toString(),
+        quantity: 1,
+      })
+    ).rejects.toMatchObject({
+      code: errorCodes.INTERNAL_ERROR,
+      httpStatus: 500,
+    });
+
+    expect(await Stock.findById(stock._id)).toMatchObject({
+      quantity: unsafeQuantity,
+      version: 1,
+    });
+    expect(await StockMovement.countDocuments()).toBe(0);
   });
 
   it("throws a typed error without reducing insufficient Stock", async () => {

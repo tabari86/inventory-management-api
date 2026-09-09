@@ -56,6 +56,39 @@ const expectV1Resource = (value, schemaName) => {
   expectNoForbiddenFields(value);
 };
 
+const createInventoryStock = async (quantity = 0) => {
+  const [product, warehouse] = await Promise.all([
+    Product.create({
+      sku: "SAFE-INTEGER-PRODUCT",
+      name: "Safe Integer Product",
+    }),
+    Warehouse.create({
+      code: "SAFE-INTEGER-WAREHOUSE",
+      name: "Safe Integer Warehouse",
+    }),
+  ]);
+
+  return Stock.create({
+    productId: product._id,
+    warehouseId: warehouse._id,
+    quantity,
+  });
+};
+
+const expectNoInventorySideEffects = async (
+  stockId,
+  expectedQuantity,
+  expectedVersion = 1
+) => {
+  expect(await Stock.findById(stockId)).toMatchObject({
+    quantity: expectedQuantity,
+    version: expectedVersion,
+  });
+  expect(await StockMovement.countDocuments()).toBe(0);
+  expect(await AuditEvent.countDocuments()).toBe(0);
+  expect(await OutboxEvent.countDocuments()).toBe(0);
+};
+
 const invalidResourceIdCases = [
   ["products", "Invalid product ID", Product],
   ["warehouses", "Invalid warehouse ID", Warehouse],
@@ -499,4 +532,179 @@ describe("WP7 API routing and HTTP contracts", () => {
       expect(await StockMovement.countDocuments()).toBe(0);
     }
   );
+
+  it("accepts an exact safe-maximum receipt and preserves event arithmetic", async () => {
+    const managerToken = await createManagerToken();
+    const stock = await createInventoryStock();
+
+    const response = await request(app)
+      .post("/api/v1/goods-receipts")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({
+        stockId: stock._id.toString(),
+        quantity: Number.MAX_SAFE_INTEGER,
+      });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.body.data.stock.quantity).toBe(Number.MAX_SAFE_INTEGER);
+    expect(response.body.data.stockMovement).toMatchObject({
+      quantity: Number.MAX_SAFE_INTEGER,
+      quantityBefore: 0,
+      quantityAfter: Number.MAX_SAFE_INTEGER,
+    });
+    expect(
+      response.body.data.stockMovement.quantityAfter -
+        response.body.data.stockMovement.quantityBefore
+    ).toBe(response.body.data.stockMovement.quantity);
+
+    const [audit, outbox] = await Promise.all([
+      AuditEvent.findOne({}).lean(),
+      OutboxEvent.findOne({}).lean(),
+    ]);
+    expect(await StockMovement.countDocuments()).toBe(1);
+    expect(await AuditEvent.countDocuments()).toBe(1);
+    expect(await OutboxEvent.countDocuments()).toBe(1);
+    expect(audit.before.snapshot.quantity).toBe(0);
+    expect(audit.after.snapshot.quantity).toBe(Number.MAX_SAFE_INTEGER);
+    expect(outbox.payload).toMatchObject({
+      signedDelta: Number.MAX_SAFE_INTEGER,
+      beforeQuantity: 0,
+      afterQuantity: Number.MAX_SAFE_INTEGER,
+    });
+  });
+
+  it.each([
+    ["existing quantity 1 plus the safe maximum", 1, Number.MAX_SAFE_INTEGER],
+    ["the safe maximum plus quantity 1", Number.MAX_SAFE_INTEGER, 1],
+  ])(
+    "rejects receipt overflow for %s with no transactional side effects",
+    async (_scenario, initialQuantity, quantity) => {
+      const managerToken = await createManagerToken();
+      const stock = await createInventoryStock(initialQuantity);
+
+      const response = await request(app)
+        .post("/api/v1/goods-receipts")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .send({ stockId: stock._id.toString(), quantity });
+
+      expectV1Error(response, 400, "VALIDATION_FAILED");
+      await expectNoInventorySideEffects(stock._id, initialQuantity);
+    }
+  );
+
+  it("rejects a raw JSON quantity whose parsed value is outside the safe range", async () => {
+    const managerToken = await createManagerToken();
+    const stock = await createInventoryStock();
+    const rawBody = `{"stockId":"${stock._id}","quantity":9007199254740993}`;
+    const parsedQuantity = JSON.parse(rawBody).quantity;
+
+    expect(parsedQuantity).toBe(9007199254740992);
+    expect(Number.isSafeInteger(parsedQuantity)).toBe(false);
+
+    const response = await request(app)
+      .post("/api/v1/goods-receipts")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .set("Content-Type", "application/json")
+      .send(rawBody);
+
+    expectV1Error(response, 400, "VALIDATION_FAILED");
+    await expectNoInventorySideEffects(stock._id, 0);
+  });
+
+  it.each([
+    ["/api/v1/goods-issues", false],
+    ["/api/v1/goods-receipts/bulk", true],
+    ["/api/v1/goods-issues/bulk", true],
+  ])("rejects an unsafe individual quantity at %s", async (path, bulk) => {
+    const managerToken = await createManagerToken();
+    const initialQuantity = path.includes("issues")
+      ? Number.MAX_SAFE_INTEGER
+      : 0;
+    const stock = await createInventoryStock(initialQuantity);
+    const item = {
+      stockId: stock._id.toString(),
+      quantity: Number.MAX_SAFE_INTEGER + 1,
+    };
+
+    const response = await request(app)
+      .post(path)
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send(bulk ? [item] : item);
+
+    expectV1Error(response, 400, "VALIDATION_FAILED");
+    await expectNoInventorySideEffects(stock._id, initialQuantity);
+  });
+
+  it("returns a safe internal error for an already unsafe persisted Stock", async () => {
+    const managerToken = await createManagerToken();
+    const stock = await createInventoryStock();
+    const unsafeQuantity = Number.MAX_SAFE_INTEGER + 1;
+    await Stock.collection.updateOne(
+      { _id: stock._id },
+      { $set: { quantity: unsafeQuantity } }
+    );
+
+    const response = await request(app)
+      .post("/api/v1/goods-receipts")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ stockId: stock._id.toString(), quantity: 1 });
+
+    expectV1Error(response, 500, "INTERNAL_ERROR");
+    expect(response.body.detail).toBe("An unexpected error occurred");
+    expect(JSON.stringify(response.body)).not.toContain(
+      "Persisted Stock quantity violates inventory integrity"
+    );
+    expect(JSON.stringify(response.body)).not.toContain(String(unsafeQuantity));
+    await expectNoInventorySideEffects(stock._id, unsafeQuantity);
+  });
+
+  it("rejects a bulk receipt when a safe aggregate would overflow existing Stock", async () => {
+    const managerToken = await createManagerToken();
+    const stock = await createInventoryStock(1);
+
+    const response = await request(app)
+      .post("/api/v1/goods-receipts/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        { stockId: stock._id.toString(), quantity: Number.MAX_SAFE_INTEGER },
+      ]);
+
+    expectV1Error(response, 400, "VALIDATION_FAILED");
+    expect(response.body.detail).toBe(
+      "Quantity would exceed the maximum safe inventory quantity"
+    );
+    await expectNoInventorySideEffects(stock._id, 1);
+  });
+
+  it("rejects same-stock bulk receipt aggregation above the safe range", async () => {
+    const managerToken = await createManagerToken();
+    const stock = await createInventoryStock();
+
+    const response = await request(app)
+      .post("/api/v1/goods-receipts/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        { stockId: stock._id.toString(), quantity: Number.MAX_SAFE_INTEGER },
+        { stockId: stock._id.toString(), quantity: 1 },
+      ]);
+
+    expectV1Error(response, 400, "VALIDATION_FAILED");
+    await expectNoInventorySideEffects(stock._id, 0);
+  });
+
+  it("rejects same-stock bulk issue aggregation above the safe range", async () => {
+    const managerToken = await createManagerToken();
+    const stock = await createInventoryStock(Number.MAX_SAFE_INTEGER);
+
+    const response = await request(app)
+      .post("/api/v1/goods-issues/bulk")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send([
+        { stockId: stock._id.toString(), quantity: Number.MAX_SAFE_INTEGER },
+        { stockId: stock._id.toString(), quantity: 1 },
+      ]);
+
+    expectV1Error(response, 400, "VALIDATION_FAILED");
+    await expectNoInventorySideEffects(stock._id, Number.MAX_SAFE_INTEGER);
+  });
 });

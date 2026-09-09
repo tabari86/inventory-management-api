@@ -18,6 +18,7 @@ const stockSchema = new mongoose.Schema(
       required: true,
       default: 0,
       min: 0,
+      validate: Number.isSafeInteger,
     },
     status: {
       type: String,

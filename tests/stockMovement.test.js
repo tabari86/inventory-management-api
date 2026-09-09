@@ -121,3 +121,35 @@ describe("Stock Movement API", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("StockMovement quantity model validation", () => {
+  it("accepts exact safe-integer receipt movement quantities", async () => {
+    const stock = await createTestStock();
+    const movement = new StockMovement({
+      stockId: stock._id,
+      type: "GOODS_RECEIPT",
+      quantity: Number.MAX_SAFE_INTEGER,
+      quantityBefore: 0,
+      quantityAfter: Number.MAX_SAFE_INTEGER,
+    });
+
+    await expect(movement.validate()).resolves.toBeUndefined();
+  });
+
+  it.each(["quantity", "quantityBefore", "quantityAfter"])(
+    "rejects an unsafe %s value",
+    async (field) => {
+      const stock = await createTestStock();
+      const movement = new StockMovement({
+        stockId: stock._id,
+        type: "GOODS_RECEIPT",
+        quantity: 1,
+        quantityBefore: 0,
+        quantityAfter: 1,
+        [field]: Number.MAX_SAFE_INTEGER + 1,
+      });
+
+      await expect(movement.validate()).rejects.toThrow();
+    }
+  );
+});

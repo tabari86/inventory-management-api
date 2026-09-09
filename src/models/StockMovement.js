@@ -41,6 +41,7 @@ const stockMovementSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 1,
+      validate: Number.isSafeInteger,
     },
     reference: {
       type: String,
@@ -53,10 +54,12 @@ const stockMovementSchema = new mongoose.Schema(
     quantityBefore: {
       type: Number,
       min: 0,
+      validate: Number.isSafeInteger,
     },
     quantityAfter: {
       type: Number,
       min: 0,
+      validate: Number.isSafeInteger,
     },
     aggregateVersion: {
       type: Number,

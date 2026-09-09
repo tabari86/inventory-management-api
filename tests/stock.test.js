@@ -226,3 +226,27 @@ describe("Stock API", () => {
     expect(await Stock.countDocuments()).toBe(0);
   });
 });
+
+describe("Stock quantity model validation", () => {
+  it("accepts Number.MAX_SAFE_INTEGER for Stock.quantity", async () => {
+    const { product, warehouse } = await createProductAndWarehouse();
+    const stock = new Stock({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: Number.MAX_SAFE_INTEGER,
+    });
+
+    await expect(stock.validate()).resolves.toBeUndefined();
+  });
+
+  it("rejects Stock.quantity above Number.MAX_SAFE_INTEGER", async () => {
+    const { product, warehouse } = await createProductAndWarehouse();
+    const stock = new Stock({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: Number.MAX_SAFE_INTEGER + 1,
+    });
+
+    await expect(stock.validate()).rejects.toThrow();
+  });
+});

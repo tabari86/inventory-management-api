@@ -61,7 +61,7 @@ const validateSingleInventoryInput = (item) => {
     );
   }
 
-  if (!Number.isInteger(quantity) || quantity <= 0) {
+  if (!Number.isSafeInteger(quantity) || quantity <= 0) {
     throw createDomainError(
       errorCodes.VALIDATION_FAILED,
       400,
@@ -134,6 +134,10 @@ const validateInventoryContext = ({
       409,
       messages.stockInactive
     );
+  }
+
+  if (!Number.isSafeInteger(stock.quantity) || stock.quantity < 0) {
+    throw new Error("Persisted Stock quantity violates inventory integrity");
   }
 
   if (!Number.isInteger(stock.version) || stock.version < 1) {
@@ -286,6 +290,17 @@ const loadSingleInventoryContext = async ({ stockId, session }) => {
 
 const updateStockForMovement = async ({ stock, quantity, type, session }) => {
   const decrement = type === "GOODS_ISSUE";
+
+  if (
+    !decrement &&
+    quantity > Number.MAX_SAFE_INTEGER - stock.quantity
+  ) {
+    throw validationError(
+      "quantity",
+      "Quantity would exceed the maximum safe inventory quantity"
+    );
+  }
+
   const filter = {
     _id: stock._id,
     version: stock.version,
@@ -294,7 +309,11 @@ const updateStockForMovement = async ({ stock, quantity, type, session }) => {
     warehouseLifecycleStatus: "active",
   };
 
-  if (decrement) filter.quantity = { $gte: quantity };
+  if (decrement) {
+    filter.quantity = { $gte: quantity };
+  } else {
+    filter.quantity = { $lte: Number.MAX_SAFE_INTEGER - quantity };
+  }
 
   const updatedStock = await Stock.findOneAndUpdate(
     filter,
@@ -313,6 +332,28 @@ const updateStockForMovement = async ({ stock, quantity, type, session }) => {
       409,
       decrement ? "Not enough stock available" : "Resource version conflict"
     );
+  }
+
+  const quantityBefore = stock.quantity;
+  const quantityAfter = updatedStock.quantity;
+
+  if (
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0 ||
+    !Number.isSafeInteger(quantityBefore) ||
+    quantityBefore < 0 ||
+    !Number.isSafeInteger(quantityAfter) ||
+    quantityAfter < 0
+  ) {
+    throw new Error("Stock movement quantity invariant failed");
+  }
+
+  const exactDelta = decrement
+    ? quantityBefore - quantityAfter === quantity
+    : quantityAfter - quantityBefore === quantity;
+
+  if (!exactDelta) {
+    throw new Error("Stock movement quantity invariant failed");
   }
 
   return updatedStock;
@@ -509,6 +550,12 @@ const createBulkInventoryMutationInSession = async ({
   for (const item of items) {
     const stockId = item.stockId.toLowerCase();
     const currentQuantity = quantityByStockId.get(stockId) || 0;
+    if (currentQuantity > Number.MAX_SAFE_INTEGER - item.quantity) {
+      throw validationError(
+        "quantity",
+        "Combined quantity exceeds the maximum safe inventory quantity"
+      );
+    }
     quantityByStockId.set(stockId, currentQuantity + item.quantity);
   }
 
@@ -557,6 +604,20 @@ const createBulkInventoryMutationInSession = async ({
       type,
       bulk: true,
     });
+  }
+
+  if (type === "GOODS_RECEIPT") {
+    const exceedsSafeStockQuantity = [...quantityByStockId].some(
+      ([stockId, quantity]) =>
+        quantity > Number.MAX_SAFE_INTEGER - stockById.get(stockId).quantity
+    );
+
+    if (exceedsSafeStockQuantity) {
+      throw validationError(
+        "quantity",
+        "Quantity would exceed the maximum safe inventory quantity"
+      );
+    }
   }
 
   if (type === "GOODS_ISSUE") {

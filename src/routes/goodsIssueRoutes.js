@@ -54,6 +54,7 @@ const router = express.Router();
  *                 quantity:
  *                   type: integer
  *                   minimum: 1
+ *                   maximum: 9007199254740991
  *                   example: 3
  *                 reference:
  *                   type: string
@@ -119,6 +120,7 @@ router.post(
  *               quantity:
  *                 type: integer
  *                 minimum: 1
+ *                 maximum: 9007199254740991
  *                 example: 3
  *               reference:
  *                 type: string
