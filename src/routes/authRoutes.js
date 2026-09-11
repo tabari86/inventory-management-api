@@ -43,6 +43,8 @@ const router = express.Router();
  *                 example: admin@example.com
  *               password:
  *                 type: string
+ *                 maxLength: 72
+ *                 description: Maximum 72 UTF-8 bytes; server-side byte-length validation is authoritative.
  *                 example: Password123
  *     responses:
  *       200:

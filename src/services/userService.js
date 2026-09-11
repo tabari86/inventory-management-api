@@ -4,6 +4,10 @@ const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
 const normalizeServiceError = require("../errors/normalizeServiceError");
 const User = require("../models/User");
+const {
+  PASSWORD_BYTE_LIMIT_MESSAGE,
+  isPasswordWithinBcryptLimit,
+} = require("../utils/bcryptPasswordBoundary");
 
 const USER_ROLES = new Set(["manager", "viewer"]);
 const USER_VALIDATION_PATHS = Object.freeze({
@@ -49,6 +53,9 @@ const assertCreateUserCommand = ({ name, email, password, role }) => {
       "password",
       "Password must be at least 8 characters long"
     );
+  }
+  if (!isPasswordWithinBcryptLimit(password)) {
+    throw validationError("password", PASSWORD_BYTE_LIMIT_MESSAGE);
   }
   if (!USER_ROLES.has(role)) {
     throw validationError("role", "Role must be manager or viewer");

@@ -14,6 +14,18 @@ const {
 require("./setupTestDb");
 
 const MALFORMED_INPUT_MARKER = ["V802", "STRUCTURAL", "MARKER"].join("_");
+const ASCII_PASSWORD_72 = "P".repeat(72);
+const ASCII_PASSWORD_73 = `${ASCII_PASSWORD_72}X`;
+const MULTIBYTE_PASSWORD_72 = "é".repeat(36);
+const MULTIBYTE_PASSWORD_73 = `${MULTIBYTE_PASSWORD_72}X`;
+const PASSWORD_BOUNDARY_CASES = [
+  ["ASCII", ASCII_PASSWORD_72],
+  ["multibyte", MULTIBYTE_PASSWORD_72],
+];
+const OVERLIMIT_PASSWORD_CASES = [
+  ["ASCII", ASCII_PASSWORD_73],
+  ["multibyte", MULTIBYTE_PASSWORD_73],
+];
 const MALFORMED_SCALAR_CASES = [
   ["object", (value = MALFORMED_INPUT_MARKER) => ({ probe: value })],
   ["array", (value = MALFORMED_INPUT_MARKER) => [value]],
@@ -74,6 +86,22 @@ const expectValidationError = (response, field) => {
   });
   expect(response.body.errors).toEqual([
     { field, message: expectedMessage },
+  ]);
+};
+
+const expectPasswordByteLimitError = (response) => {
+  expectV1Error(response, {
+    status: 400,
+    code: "VALIDATION_FAILED",
+    title: "Validation failed",
+    detail: "Validation failed",
+    field: "password",
+  });
+  expect(response.body.errors).toEqual([
+    {
+      field: "password",
+      message: "Password must be at most 72 UTF-8 bytes",
+    },
   ]);
 };
 
@@ -175,6 +203,94 @@ describe("Auth API", () => {
     expect(response.body.data.user.email).toBe("login.user@example.com");
     expect(response.body.data.user.role).toBe("admin");
   });
+
+  it.each(PASSWORD_BOUNDARY_CASES)(
+    "allows a %s password at exactly 72 UTF-8 bytes to authenticate normally",
+    async (label, password) => {
+      expect(Buffer.byteLength(password, "utf8")).toBe(72);
+      const user = await createTestUser({
+        email: `boundary.${label.toLowerCase()}@example.com`,
+        password,
+      });
+
+      const response = await request(app).post("/api/v1/auth/login").send({
+        email: user.email,
+        password,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body.data).toMatchObject({
+        accessToken: expect.any(String),
+        refreshToken: expect.any(String),
+      });
+      expect(
+        await RefreshToken.countDocuments({ userId: user._id })
+      ).toBe(1);
+    }
+  );
+
+  it.each(OVERLIMIT_PASSWORD_CASES)(
+    "rejects a %s 73-byte password account-independently before authentication",
+    async (label, password) => {
+      expect(Buffer.byteLength(password, "utf8")).toBe(73);
+      const activeUser = await createTestUser({
+        email: `overlimit.${label.toLowerCase()}.active@example.com`,
+        password: "Password123",
+      });
+      const inactiveUser = await createTestUser({
+        email: `overlimit.${label.toLowerCase()}.inactive@example.com`,
+        password: "Password123",
+        status: "inactive",
+      });
+      const usersBefore = await Promise.all([
+        readUserState(activeUser._id),
+        readUserState(inactiveUser._id),
+      ]);
+      const logSpy = jest.spyOn(logger, "log");
+      const loginSpy = jest.spyOn(authService, "login");
+
+      const responses = [];
+      for (const email of [
+        activeUser.email,
+        inactiveUser.email,
+        `overlimit.${label.toLowerCase()}.unknown@example.com`,
+      ]) {
+        responses.push(
+          await request(app)
+            .post("/api/v1/auth/login")
+            .send({ email, password })
+        );
+      }
+
+      expect(responses.map(securityFields)).toEqual(
+        Array.from({ length: 3 }, () => ({
+          status: 400,
+          title: "Validation failed",
+          code: "VALIDATION_FAILED",
+          detail: "Validation failed",
+          retryable: false,
+        }))
+      );
+      for (const response of responses) {
+        expectPasswordByteLimitError(response);
+        expect(response.body).not.toHaveProperty("data");
+      }
+      expect(loginSpy).not.toHaveBeenCalled();
+      expect(
+        JSON.stringify({
+          responses: responses.map((response) => response.body),
+          logs: logSpy.mock.calls,
+        })
+      ).not.toContain(password);
+      expect(await RefreshToken.countDocuments()).toBe(0);
+      expect(
+        await Promise.all([
+          readUserState(activeUser._id),
+          readUserState(inactiveUser._id),
+        ])
+      ).toEqual(usersBefore);
+    }
+  );
 
   it("rejects login with the wrong password", async () => {
     await createTestUser({

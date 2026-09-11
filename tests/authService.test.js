@@ -1,5 +1,6 @@
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
 
 const authService = require("../src/services/authService");
 const DomainError = require("../src/errors/DomainError");
@@ -13,6 +14,18 @@ const hashToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
 
 const MALFORMED_INPUT_MARKER = ["V802", "SERVICE", "MARKER"].join("_");
+const ASCII_PASSWORD_72 = "P".repeat(72);
+const ASCII_PASSWORD_73 = `${ASCII_PASSWORD_72}X`;
+const MULTIBYTE_PASSWORD_72 = "é".repeat(36);
+const MULTIBYTE_PASSWORD_73 = `${MULTIBYTE_PASSWORD_72}X`;
+const PASSWORD_BOUNDARY_CASES = [
+  ["ASCII", ASCII_PASSWORD_72],
+  ["multibyte", MULTIBYTE_PASSWORD_72],
+];
+const OVERLIMIT_PASSWORD_CASES = [
+  ["ASCII", ASCII_PASSWORD_73],
+  ["multibyte", MULTIBYTE_PASSWORD_73],
+];
 const MALFORMED_SCALAR_CASES = [
   ["object", () => ({ probe: MALFORMED_INPUT_MARKER })],
   ["array", () => [MALFORMED_INPUT_MARKER]],
@@ -21,7 +34,11 @@ const MALFORMED_SCALAR_CASES = [
   ["null", () => null],
 ];
 
-const expectServiceValidationError = async (operation, field) => {
+const expectServiceValidationError = async (
+  operation,
+  field,
+  expectedMessage = expect.any(String)
+) => {
   let caughtError;
 
   try {
@@ -40,7 +57,7 @@ const expectServiceValidationError = async (operation, field) => {
     errors: [
       {
         field,
-        message: expect.any(String),
+        message: expectedMessage,
       },
     ],
   });
@@ -111,6 +128,57 @@ describe("Authentication service", () => {
       await RefreshToken.findOne({ tokenHash: hashToken(result.refreshToken) })
     ).not.toBeNull();
   });
+
+  it.each(PASSWORD_BOUNDARY_CASES)(
+    "authenticates a %s password at exactly 72 UTF-8 bytes",
+    async (label, password) => {
+      expect(Buffer.byteLength(password, "utf8")).toBe(72);
+      const user = await createTestUser({
+        email: `service.boundary.${label.toLowerCase()}@example.com`,
+        password,
+      });
+
+      const result = await authService.login({
+        email: user.email,
+        password,
+      });
+
+      expect(result).toMatchObject({
+        accessToken: expect.any(String),
+        refreshToken: expect.any(String),
+      });
+      expect(
+        await RefreshToken.countDocuments({ userId: user._id })
+      ).toBe(1);
+    }
+  );
+
+  it.each(OVERLIMIT_PASSWORD_CASES)(
+    "rejects a %s 73-byte password before database, bcrypt, and token work",
+    async (label, password) => {
+      expect(Buffer.byteLength(password, "utf8")).toBe(73);
+      const findUserSpy = jest.spyOn(User, "findOne");
+      const compareSpy = jest.spyOn(bcrypt, "compare");
+      const signSpy = jest.spyOn(jwt, "sign");
+      const persistTokenSpy = jest.spyOn(RefreshToken, "create");
+
+      await expectServiceValidationError(
+        () =>
+          authService.login({
+            email: `service.overlimit.${label.toLowerCase()}@example.com`,
+            password,
+          }),
+        "password",
+        "Password must be at most 72 UTF-8 bytes"
+      );
+
+      expect(findUserSpy).not.toHaveBeenCalled();
+      expect(compareSpy).not.toHaveBeenCalled();
+      expect(signSpy).not.toHaveBeenCalled();
+      expect(persistTokenSpy).not.toHaveBeenCalled();
+      expect(await RefreshToken.countDocuments()).toBe(0);
+    }
+  );
 
   it("rejects a wrong password with the stable domain error", async () => {
     await createTestUser({

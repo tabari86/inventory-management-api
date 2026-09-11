@@ -1,4 +1,8 @@
 const { body } = require("express-validator");
+const {
+  PASSWORD_BYTE_LIMIT_MESSAGE,
+  isPasswordWithinBcryptLimit,
+} = require("../utils/bcryptPasswordBoundary");
 
 const isPrimitiveString = (value) => typeof value === "string";
 
@@ -21,11 +25,17 @@ const createUserValidation = [
     .normalizeEmail(),
 
   body("password")
+    .custom(isPrimitiveString)
+    .withMessage("Password must be a string")
+    .bail()
     .notEmpty()
     .withMessage("Password is required")
     .bail()
     .isLength({ min: 8 })
-    .withMessage("Password must be at least 8 characters long"),
+    .withMessage("Password must be at least 8 characters long")
+    .bail()
+    .custom(isPasswordWithinBcryptLimit)
+    .withMessage(PASSWORD_BYTE_LIMIT_MESSAGE),
 
   body("role")
     .optional()
@@ -51,7 +61,10 @@ const loginUserValidation = [
     .withMessage("Password must be a string")
     .bail()
     .notEmpty()
-    .withMessage("Password is required"),
+    .withMessage("Password is required")
+    .bail()
+    .custom(isPasswordWithinBcryptLimit)
+    .withMessage(PASSWORD_BYTE_LIMIT_MESSAGE),
 ];
 
 const refreshTokenValidation = [

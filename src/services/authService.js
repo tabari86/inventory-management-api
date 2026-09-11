@@ -7,6 +7,10 @@ const DomainError = require("../errors/DomainError");
 const errorCodes = require("../errors/errorCodes");
 const RefreshToken = require("../models/RefreshToken");
 const User = require("../models/User");
+const {
+  PASSWORD_BYTE_LIMIT_MESSAGE,
+  isPasswordWithinBcryptLimit,
+} = require("../utils/bcryptPasswordBoundary");
 const withTransaction = require("../utils/transaction");
 
 const REFRESH_TOKEN_BYTES = 64;
@@ -107,6 +111,12 @@ const presentUser = (user) => ({
 const login = async ({ email, password, applicationContext = {} }) => {
   requireStringInput(email, "email", "Email must be a string");
   requireStringInput(password, "password", "Password must be a string");
+  if (!isPasswordWithinBcryptLimit(password)) {
+    throw invalidStructuralInputError(
+      "password",
+      PASSWORD_BYTE_LIMIT_MESSAGE
+    );
+  }
 
   try {
     const user = await User.findOne({ email }).select("+password");

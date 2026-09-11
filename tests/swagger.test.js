@@ -517,6 +517,25 @@ describe("Swagger/OpenAPI specification", () => {
     expect(roleSchema.enum).toEqual(["manager", "viewer"]);
   });
 
+  it("documents the authoritative UTF-8 password byte boundary", () => {
+    const passwordSchemas = [
+      swaggerSpec.paths["/api/v1/users"].post.requestBody.content[
+        "application/json"
+      ].schema.properties.password,
+      swaggerSpec.paths["/api/v1/auth/login"].post.requestBody.content[
+        "application/json"
+      ].schema.properties.password,
+    ];
+
+    for (const passwordSchema of passwordSchemas) {
+      expect(passwordSchema.maxLength).toBe(72);
+      expect(passwordSchema.description).toContain("Maximum 72 UTF-8 bytes");
+      expect(passwordSchema.description).toContain(
+        "server-side byte-length validation is authoritative"
+      );
+    }
+  });
+
   it("documents precise single product and warehouse update schemas", () => {
     const productSchema =
       swaggerSpec.paths["/api/v1/products/{id}"].patch.requestBody.content[

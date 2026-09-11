@@ -13,6 +13,17 @@ User. Role middleware applies the `admin`, `manager`, and `viewer` permissions
 documented by the API; public registration and API-based admin creation are not
 available.
 
+Plaintext passwords submitted for account creation or login, and the
+`ADMIN_PASSWORD` bootstrap value, must not exceed 72 UTF-8 bytes. HTTP, service,
+and seed-configuration boundaries enforce the byte length; passwords are not
+trimmed or Unicode-normalized.
+
+This prevention rule does not repair pre-fix bcrypt hashes. A stored bcrypt hash
+cannot prove the original plaintext byte length, and a hash originally derived
+from more than 72 bytes may still verify against its first-72-byte prefix.
+Credentials of unknown provenance may therefore require a reset or
+reprovisioning under the corrected policy.
+
 Refresh tokens are random 64-byte values returned once to the client. Only a
 SHA-256 hash is stored, with a seven-day expiry. Refresh rotates and revokes the
 used token; logout revokes the presented token. Each refresh token is

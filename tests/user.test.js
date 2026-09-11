@@ -1,3 +1,4 @@
+const bcrypt = require("bcrypt");
 const request = require("supertest");
 
 const app = require("../src/app");
@@ -9,7 +10,30 @@ const {
 
 require("./setupTestDb");
 
+const PASSWORD_BYTE_LIMIT_MESSAGE =
+  "Password must be at most 72 UTF-8 bytes";
+const ACCEPTED_PASSWORD_BOUNDARIES = [
+  ["ASCII at exactly 72 UTF-8 bytes", "A".repeat(72), "ascii-72"],
+  ["multibyte at exactly 72 UTF-8 bytes", "é".repeat(36), "utf8-72"],
+];
+const REJECTED_PASSWORD_BOUNDARIES = [
+  ["ASCII above 72 UTF-8 bytes", "A".repeat(73), "ascii-73"],
+  [
+    "short-looking multibyte above 72 UTF-8 bytes",
+    `${"é".repeat(36)}X`,
+    "utf8-73",
+  ],
+];
+const USER_CREATION_ROUTES = [
+  ["canonical", "/api/v1/users", "v1"],
+  ["legacy", "/api/users", "legacy"],
+];
+
 describe("User API", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   it("allows an admin to create a manager without returning the password", async () => {
     const adminToken = await createAdminToken();
 
@@ -130,4 +154,104 @@ describe("User API", () => {
     expect(response.statusCode).toBe(400);
     expect(await User.findOne({ email: "blank.name@example.com" })).toBeNull();
   });
+
+  describe.each(USER_CREATION_ROUTES)(
+    "%s password byte boundary",
+    (contract, path, routeKey) => {
+      it.each(ACCEPTED_PASSWORD_BOUNDARIES)(
+        "accepts %s",
+        async (_caseName, password, caseKey) => {
+          const adminToken = await createAdminToken();
+          const email = `${routeKey}.${caseKey}@example.com`;
+
+          expect(Buffer.byteLength(password, "utf8")).toBe(72);
+
+          const response = await request(app)
+            .post(path)
+            .set("Authorization", `Bearer ${adminToken}`)
+            .send({
+              name: `${contract} Boundary User`,
+              email,
+              password,
+              role: "viewer",
+            });
+
+          expect(response.statusCode).toBe(201);
+          if (contract === "canonical") {
+            expect(response.body).toMatchObject({
+              data: { email, role: "viewer", status: "active" },
+              meta: { schemaVersion: "1.0" },
+            });
+            expect(response.body).not.toHaveProperty("message");
+          } else {
+            expect(response.body).toMatchObject({
+              message: "User created successfully",
+              data: { email, role: "viewer", status: "active" },
+            });
+            expect(response.body).not.toHaveProperty("meta");
+          }
+          expect(JSON.stringify(response.body)).not.toContain(password);
+
+          const stored = await User.findOne({ email }).select("+password");
+          expect(stored).not.toBeNull();
+          expect(stored.password).not.toBe(password);
+          expect(await bcrypt.compare(password, stored.password)).toBe(true);
+        }
+      );
+
+      it.each(REJECTED_PASSWORD_BOUNDARIES)(
+        "rejects %s before hashing or persistence",
+        async (_caseName, password, caseKey) => {
+          const adminToken = await createAdminToken();
+          const email = `${routeKey}.${caseKey}@example.com`;
+          const hashSpy = jest.spyOn(bcrypt, "hash");
+          const createSpy = jest.spyOn(User, "create");
+
+          expect(Buffer.byteLength(password, "utf8")).toBe(73);
+
+          const response = await request(app)
+            .post(path)
+            .set("Authorization", `Bearer ${adminToken}`)
+            .send({
+              name: `${contract} Rejected Boundary User`,
+              email,
+              password,
+              role: "viewer",
+            });
+
+          expect(response.statusCode).toBe(400);
+          if (contract === "canonical") {
+            expect(response.body).toMatchObject({
+              type: "inventory-error",
+              title: "Validation failed",
+              status: 400,
+              code: "VALIDATION_FAILED",
+              detail: "Validation failed",
+              retryable: false,
+              errors: [
+                {
+                  field: "password",
+                  message: PASSWORD_BYTE_LIMIT_MESSAGE,
+                },
+              ],
+            });
+          } else {
+            expect(response.body).toEqual({
+              message: "Validation failed",
+              errors: [
+                {
+                  field: "password",
+                  message: PASSWORD_BYTE_LIMIT_MESSAGE,
+                },
+              ],
+            });
+          }
+          expect(JSON.stringify(response.body)).not.toContain(password);
+          expect(hashSpy).not.toHaveBeenCalled();
+          expect(createSpy).not.toHaveBeenCalled();
+          expect(await User.collection.findOne({ email })).toBeNull();
+        }
+      );
+    }
+  );
 });

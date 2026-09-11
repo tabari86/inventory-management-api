@@ -170,6 +170,8 @@ describe("Environment validation", () => {
 });
 
 describe("Admin seed environment validation", () => {
+  const asciiPassword72 = "A".repeat(72);
+  const unicodePassword72 = "é".repeat(36);
   const validSeedEnvironment = (overrides = {}) => ({
     NODE_ENV: "development",
     MONGODB_URI: "mongodb://localhost:27017/inventory",
@@ -213,4 +215,58 @@ describe("Admin seed environment validation", () => {
       )
     ).toThrow("known placeholder");
   });
+
+  it.each([
+    ["ASCII", asciiPassword72],
+    ["multibyte", unicodePassword72],
+  ])(
+    "accepts a production ADMIN_PASSWORD at exactly 72 UTF-8 bytes (%s)",
+    (_label, password) => {
+      expect(Buffer.byteLength(password, "utf8")).toBe(72);
+
+      const configuration = parseSeedAdminEnvironment(
+        validSeedEnvironment({
+          NODE_ENV: "production",
+          ADMIN_PASSWORD: password,
+        })
+      );
+
+      expect(configuration.adminPassword).toBe(password);
+    }
+  );
+
+  it.each([
+    ["ASCII", `${asciiPassword72}X`],
+    ["short-looking multibyte", `${unicodePassword72}X`],
+  ])(
+    "rejects a 73-byte production ADMIN_PASSWORD with a static rule (%s)",
+    (_label, password) => {
+      expect(Buffer.byteLength(password, "utf8")).toBe(73);
+
+      let rejection;
+      try {
+        parseSeedAdminEnvironment(
+          validSeedEnvironment({
+            NODE_ENV: "production",
+            ADMIN_PASSWORD: password,
+          })
+        );
+      } catch (error) {
+        rejection = error;
+      }
+
+      expect(rejection).toBeInstanceOf(EnvironmentValidationError);
+      expect(rejection).toMatchObject({
+        code: "STARTUP_CONFIGURATION_INVALID",
+        issues: [
+          {
+            variable: "ADMIN_PASSWORD",
+            rule: "must be at most 72 UTF-8 bytes",
+          },
+        ],
+      });
+      expect(rejection.message).not.toContain(password);
+      expect(JSON.stringify(rejection.issues)).not.toContain(password);
+    }
+  );
 });

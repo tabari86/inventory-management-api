@@ -1,3 +1,8 @@
+const {
+  MAX_BCRYPT_PASSWORD_BYTES,
+  isPasswordWithinBcryptLimit,
+} = require("../utils/bcryptPasswordBoundary");
+
 const SUPPORTED_ENVIRONMENTS = Object.freeze([
   "development",
   "test",
@@ -333,6 +338,15 @@ const parseSeedAdminEnvironment = (environment = process.env) => {
     issues.push({
       variable: "ADMIN_PASSWORD",
       rule: "must contain at least 8 characters",
+    });
+  }
+  if (
+    adminPassword !== undefined &&
+    !isPasswordWithinBcryptLimit(adminPassword)
+  ) {
+    issues.push({
+      variable: "ADMIN_PASSWORD",
+      rule: `must be at most ${MAX_BCRYPT_PASSWORD_BYTES} UTF-8 bytes`,
     });
   }
   if (nodeEnv === "production" && adminPassword !== undefined) {

@@ -552,12 +552,21 @@ The seed command is safe to run again. If an admin already exists, no new admin 
 - The seed script checks whether an admin already exists before creating one.
 - Admin users can create `manager` and `viewer` users.
 - API users cannot create another admin through `/api/users`.
+- Plaintext passwords submitted for account creation or login, and the
+  `ADMIN_PASSWORD` bootstrap value, must not exceed 72 UTF-8 bytes. The server
+  enforces this byte-based limit without trimming or Unicode-normalizing the
+  password.
 - Passwords are hashed before being stored.
 - Refresh tokens are stored as hashes in the database.
 - Refresh tokens are rotated when refreshing access tokens.
 - Older refresh tokens are revoked after a new successful login under normal operation.
 - Logout revokes the submitted refresh token.
 - Login requests are rate-limited after repeated failed attempts.
+
+The byte limit prevents new overlength credentials and login submissions, but
+does not repair existing bcrypt hashes. A pre-fix hash cannot prove the original
+password's byte length, so credentials of unknown provenance may require a reset
+or reprovisioning under the corrected policy.
 
 ### Product Rules
 
