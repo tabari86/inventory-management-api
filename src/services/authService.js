@@ -41,6 +41,21 @@ const invalidRefreshTokenError = () =>
     message: "Invalid refresh token",
   });
 
+const invalidStructuralInputError = (field, message) =>
+  new DomainError({
+    code: errorCodes.VALIDATION_FAILED,
+    httpStatus: 400,
+    message: "Validation failed",
+    retryable: false,
+    errors: [{ field, message }],
+  });
+
+const requireStringInput = (value, field, message) => {
+  if (typeof value !== "string") {
+    throw invalidStructuralInputError(field, message);
+  }
+};
+
 const unexpectedServiceError = (error, message) => {
   if (error instanceof DomainError) return error;
 
@@ -90,14 +105,17 @@ const presentUser = (user) => ({
 });
 
 const login = async ({ email, password, applicationContext = {} }) => {
+  requireStringInput(email, "email", "Email must be a string");
+  requireStringInput(password, "password", "Password must be a string");
+
   try {
     const user = await User.findOne({ email }).select("+password");
 
     if (!user) throw invalidCredentialsError();
-    if (user.status !== "active") throw inactiveUserError();
 
     const passwordIsValid = await bcrypt.compare(password, user.password);
     if (!passwordIsValid) throw invalidCredentialsError();
+    if (user.status !== "active") throw inactiveUserError();
 
     const accessToken = createAccessToken(user);
     const tokenMaterial = createRefreshTokenMaterial();
@@ -137,6 +155,12 @@ const login = async ({ email, password, applicationContext = {} }) => {
 };
 
 const rotateRefreshToken = async ({ refreshToken }) => {
+  requireStringInput(
+    refreshToken,
+    "refreshToken",
+    "Refresh token must be a string"
+  );
+
   try {
     return await withTransaction(async (session) => {
       const refreshTokenHash = hashRefreshToken(refreshToken);
@@ -183,6 +207,12 @@ const rotateRefreshToken = async ({ refreshToken }) => {
 };
 
 const logout = async ({ refreshToken }) => {
+  requireStringInput(
+    refreshToken,
+    "refreshToken",
+    "Refresh token must be a string"
+  );
+
   try {
     const refreshTokenHash = hashRefreshToken(refreshToken);
     await RefreshToken.updateOne(

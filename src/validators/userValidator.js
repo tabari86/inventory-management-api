@@ -1,5 +1,7 @@
 const { body } = require("express-validator");
 
+const isPrimitiveString = (value) => typeof value === "string";
+
 const createUserValidation = [
   body("name")
     .trim()
@@ -33,6 +35,9 @@ const createUserValidation = [
 
 const loginUserValidation = [
   body("email")
+    .custom(isPrimitiveString)
+    .withMessage("Email must be a string")
+    .bail()
     .notEmpty()
     .withMessage("Email is required")
     .bail()
@@ -42,12 +47,18 @@ const loginUserValidation = [
     .normalizeEmail(),
 
   body("password")
+    .custom(isPrimitiveString)
+    .withMessage("Password must be a string")
+    .bail()
     .notEmpty()
     .withMessage("Password is required"),
 ];
 
 const refreshTokenValidation = [
   body("refreshToken")
+    .custom(isPrimitiveString)
+    .withMessage("Refresh token must be a string")
+    .bail()
     .notEmpty()
     .withMessage("Refresh token is required"),
 ];
