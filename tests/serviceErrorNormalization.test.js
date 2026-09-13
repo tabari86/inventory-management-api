@@ -7,6 +7,7 @@ const normalizeServiceError = require("../src/errors/normalizeServiceError");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
 const StockMovement = require("../src/models/StockMovement");
+const User = require("../src/models/User");
 const Warehouse = require("../src/models/Warehouse");
 const { executeInventoryMutation } = require("../src/services/idempotencyExecutor");
 const inventoryService = require("../src/services/inventoryService");
@@ -24,6 +25,23 @@ const validatorError = ({ path, kind, marker = "private rejected value" }) =>
     message: marker,
     value: marker,
   });
+
+const expectNameValidationFailure = async (operation, message) => {
+  let thrown;
+  try {
+    await operation();
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBeInstanceOf(DomainError);
+  expect(thrown).toMatchObject({
+    code: errorCodes.VALIDATION_FAILED,
+    httpStatus: 400,
+    retryable: false,
+    errors: [{ field: "name", message }],
+  });
+};
 
 const createInventory = async (quantity = 5) => {
   const [product, warehouse] = await Promise.all([
@@ -422,5 +440,112 @@ describe("Verification 1B-A service error contracts", () => {
         retryable: false,
       });
     }
+  });
+
+  it("rejects malformed User names before lookup, hashing, or mutation", async () => {
+    const validUserCredential = "V804-Test-Fixture-123";
+    const malformedNames = [
+      { probe: "V804-DIRECT-USER-OBJECT" },
+      ["V804-DIRECT-USER-ARRAY"],
+      123,
+      true,
+      null,
+    ];
+    const findSpy = jest.spyOn(User, "findOne");
+    const hashSpy = jest.spyOn(bcrypt, "hash");
+    const createSpy = jest.spyOn(User, "create");
+
+    for (const name of malformedNames) {
+      await expectNameValidationFailure(
+        () =>
+          userService.createUser({
+            name,
+            email: "v804-direct-user@example.com",
+            password: validUserCredential,
+            role: "viewer",
+          }),
+        "Name is required"
+      );
+    }
+
+    expect(findSpy).not.toHaveBeenCalled();
+    expect(hashSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Product names before create or update database work", async () => {
+    const malformedNames = [
+      { probe: "V804-DIRECT-PRODUCT-OBJECT" },
+      ["V804-DIRECT-PRODUCT-ARRAY"],
+      123,
+      true,
+      null,
+    ];
+    const productId = new mongoose.Types.ObjectId().toString();
+    const findSpy = jest.spyOn(Product, "findOne");
+    const createSpy = jest.spyOn(Product, "create");
+    const updateSpy = jest.spyOn(Product, "findOneAndUpdate");
+
+    for (const name of malformedNames) {
+      await expectNameValidationFailure(
+        () =>
+          productService.createProduct({
+            sku: "V804-DIRECT-PRODUCT",
+            name,
+          }),
+        "Product name is required"
+      );
+      await expectNameValidationFailure(
+        () =>
+          productService.updateProduct({
+            productId,
+            update: { name, expectedVersion: 1 },
+          }),
+        "Product name cannot be empty"
+      );
+    }
+
+    expect(findSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Warehouse names before create or update database work", async () => {
+    const malformedNames = [
+      { probe: "V804-DIRECT-WAREHOUSE-OBJECT" },
+      ["V804-DIRECT-WAREHOUSE-ARRAY"],
+      123,
+      true,
+      null,
+    ];
+    const warehouseId = new mongoose.Types.ObjectId().toString();
+    const findSpy = jest.spyOn(Warehouse, "findOne");
+    const findByIdSpy = jest.spyOn(Warehouse, "findById");
+    const createSpy = jest.spyOn(Warehouse, "create");
+    const updateSpy = jest.spyOn(Warehouse, "findOneAndUpdate");
+
+    for (const name of malformedNames) {
+      await expectNameValidationFailure(
+        () =>
+          warehouseService.createWarehouse({
+            code: "V804-DIRECT-WAREHOUSE",
+            name,
+          }),
+        "Warehouse name is required"
+      );
+      await expectNameValidationFailure(
+        () =>
+          warehouseService.updateWarehouse({
+            warehouseId,
+            update: { name, expectedVersion: 1 },
+          }),
+        "Warehouse name cannot be empty"
+      );
+    }
+
+    expect(findSpy).not.toHaveBeenCalled();
+    expect(findByIdSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 });

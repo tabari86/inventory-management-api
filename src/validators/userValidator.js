@@ -8,6 +8,12 @@ const isPrimitiveString = (value) => typeof value === "string";
 
 const createUserValidation = [
   body("name")
+    .exists()
+    .withMessage("Name is required")
+    .bail()
+    .custom(isPrimitiveString)
+    .withMessage("Name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Name is required")

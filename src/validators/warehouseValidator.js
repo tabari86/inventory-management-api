@@ -19,6 +19,12 @@ const createWarehouseValidation = [
     .withMessage("Warehouse code may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("name")
+    .exists()
+    .withMessage("Warehouse name is required")
+    .bail()
+    .isString()
+    .withMessage("Warehouse name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Warehouse name is required")
@@ -65,6 +71,9 @@ const updateWarehouseValidation = [
 
   body("name")
     .optional()
+    .isString()
+    .withMessage("Warehouse name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Warehouse name cannot be empty")
@@ -127,6 +136,12 @@ const createBulkWarehousesValidation = [
     .withMessage("Warehouse code may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("*.name")
+    .exists()
+    .withMessage("Warehouse name is required")
+    .bail()
+    .isString()
+    .withMessage("Warehouse name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Warehouse name is required")
@@ -203,6 +218,9 @@ const updateBulkWarehousesValidation = [
 
   body("*.name")
     .optional()
+    .isString()
+    .withMessage("Warehouse name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Warehouse name cannot be empty")

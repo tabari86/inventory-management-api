@@ -1,9 +1,13 @@
 const request = require("supertest");
 
 const app = require("../src/app");
+const AuditEvent = require("../src/models/AuditEvent");
+const IdempotencyRecord = require("../src/models/IdempotencyRecord");
+const OutboxEvent = require("../src/models/OutboxEvent");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
 const Warehouse = require("../src/models/Warehouse");
+const productService = require("../src/services/productService");
 const {
   createAdminToken,
   createManagerToken,
@@ -39,6 +43,36 @@ const createSkuOwnershipFixture = async (prefix) => {
   const stocks = await createRelatedStocks(products, `${prefix}-WH`);
 
   return { products, stocks };
+};
+
+const PRODUCT_NAME_TYPE_MESSAGE = "Product name must be a string";
+const MALFORMED_PRODUCT_NAMES = [
+  ["object", (marker) => ({ marker })],
+  ["array", (marker) => [marker]],
+  ["number", () => 804],
+  ["boolean", () => true],
+  ["null", () => null],
+];
+
+const captureProductMutationCounts = async () => ({
+  products: await Product.countDocuments(),
+  audits: await AuditEvent.countDocuments(),
+  outboxes: await OutboxEvent.countDocuments(),
+  idempotencyRecords: await IdempotencyRecord.countDocuments(),
+});
+
+const expectV1ProductNameTypeError = (response, field = "name") => {
+  expect(response.statusCode).toBe(400);
+  expect(response.body).toMatchObject({
+    status: 400,
+    code: "VALIDATION_FAILED",
+    detail: "Validation failed",
+  });
+  expect(response.body.errors).toEqual(
+    expect.arrayContaining([
+      { field, message: PRODUCT_NAME_TYPE_MESSAGE },
+    ])
+  );
 };
 
 describe("Product API", () => {
@@ -795,5 +829,227 @@ describe("Product API", () => {
 
     expect(response.statusCode).toBe(400);
     expect(await Product.countDocuments()).toBe(0);
+  });
+
+  it.each(MALFORMED_PRODUCT_NAMES)(
+    "rejects a %s product name before canonical single-create business logic",
+    async (label, buildName) => {
+      const managerToken = await createManagerToken();
+      const caseId = label.toUpperCase();
+      const marker = `V804-PRODUCT-CREATE-${caseId}`;
+      const before = await captureProductMutationCounts();
+      const createProductSpy = jest.spyOn(productService, "createProduct");
+
+      const response = await request(app)
+        .post("/api/v1/products")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .set("Idempotency-Key", `v804.product.create.${label}`)
+        .send({
+          sku: `V804-CREATE-${caseId}`,
+          name: buildName(marker),
+        });
+
+      expectV1ProductNameTypeError(response);
+      expect(createProductSpy).not.toHaveBeenCalled();
+      expect(await captureProductMutationCounts()).toEqual(before);
+      expect(JSON.stringify(response.body)).not.toContain(marker);
+    }
+  );
+
+  it("trims a valid canonical single-create product name", async () => {
+    const managerToken = await createManagerToken();
+
+    const response = await request(app)
+      .post("/api/v1/products")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({
+        sku: "V804-CREATE-VALID",
+        name: "  V804 Valid Created Product  ",
+      });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.body.data).toMatchObject({
+      sku: "V804-CREATE-VALID",
+      name: "V804 Valid Created Product",
+    });
+    await expect(
+      Product.findOne({ sku: "V804-CREATE-VALID" }).lean()
+    ).resolves.toMatchObject({ name: "V804 Valid Created Product" });
+  });
+
+  it.each(MALFORMED_PRODUCT_NAMES)(
+    "rejects a %s product name before canonical single-update business logic",
+    async (label, buildName) => {
+      const managerToken = await createManagerToken();
+      const caseId = label.toUpperCase();
+      const marker = `V804-PRODUCT-UPDATE-${caseId}`;
+      const product = await Product.create({
+        sku: `V804-UPDATE-${caseId}`,
+        name: `Original ${label} Product`,
+      });
+      const productBefore = await Product.findById(product._id).lean();
+      const countsBefore = await captureProductMutationCounts();
+      const updateProductSpy = jest.spyOn(productService, "updateProduct");
+
+      const response = await request(app)
+        .patch(`/api/v1/products/${product._id}`)
+        .set("Authorization", `Bearer ${managerToken}`)
+        .set("Idempotency-Key", `v804.product.update.${label}`)
+        .send({
+          name: buildName(marker),
+          expectedVersion: product.version,
+        });
+
+      expectV1ProductNameTypeError(response);
+      expect(updateProductSpy).not.toHaveBeenCalled();
+      await expect(Product.findById(product._id).lean()).resolves.toEqual(
+        productBefore
+      );
+      expect(await captureProductMutationCounts()).toEqual(countsBefore);
+      expect(JSON.stringify(response.body)).not.toContain(marker);
+    }
+  );
+
+  it("trims a valid canonical single-update name and increments once", async () => {
+    const managerToken = await createManagerToken();
+    const product = await Product.create({
+      sku: "V804-UPDATE-VALID",
+      name: "Original Valid Product",
+    });
+
+    const response = await request(app)
+      .patch(`/api/v1/products/${product._id}`)
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({
+        name: "  V804 Valid Updated Product  ",
+        expectedVersion: product.version,
+      });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data).toMatchObject({
+      name: "V804 Valid Updated Product",
+      version: product.version + 1,
+    });
+    await expect(Product.findById(product._id).lean()).resolves.toMatchObject({
+      name: "V804 Valid Updated Product",
+      version: product.version + 1,
+    });
+  });
+
+  it.each([
+    ["object", (marker) => ({ marker })],
+    ["number", () => 804],
+  ])(
+    "rejects a %s product name atomically in canonical bulk create",
+    async (label, buildName) => {
+      const managerToken = await createManagerToken();
+      const caseId = label.toUpperCase();
+      const marker = `V804-PRODUCT-BULK-CREATE-${caseId}`;
+      const before = await captureProductMutationCounts();
+      const createProductsBulkSpy = jest.spyOn(
+        productService,
+        "createProductsBulk"
+      );
+
+      const response = await request(app)
+        .post("/api/v1/products/bulk")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .set("Idempotency-Key", `v804.product.bulk-create.${label}`)
+        .send([
+          {
+            sku: `V804-BULK-CREATE-VALID-${caseId}`,
+            name: "Must Not Be Created",
+          },
+          {
+            sku: `V804-BULK-CREATE-BAD-${caseId}`,
+            name: buildName(marker),
+          },
+        ]);
+
+      expectV1ProductNameTypeError(response, "[1].name");
+      expect(createProductsBulkSpy).not.toHaveBeenCalled();
+      expect(await captureProductMutationCounts()).toEqual(before);
+      expect(JSON.stringify(response.body)).not.toContain(marker);
+    }
+  );
+
+  it.each([
+    ["object", (marker) => ({ marker })],
+    ["boolean", () => true],
+  ])(
+    "rejects a %s product name atomically in canonical bulk update",
+    async (label, buildName) => {
+      const managerToken = await createManagerToken();
+      const caseId = label.toUpperCase();
+      const marker = `V804-PRODUCT-BULK-UPDATE-${caseId}`;
+      const products = await Product.create([
+        {
+          sku: `V804-BULK-UPDATE-A-${caseId}`,
+          name: "Original Bulk Product A",
+        },
+        {
+          sku: `V804-BULK-UPDATE-B-${caseId}`,
+          name: "Original Bulk Product B",
+        },
+      ]);
+      const productsBefore = await Product.find({}).sort({ _id: 1 }).lean();
+      const countsBefore = await captureProductMutationCounts();
+      const updateProductsBulkSpy = jest.spyOn(
+        productService,
+        "updateProductsBulk"
+      );
+
+      const response = await request(app)
+        .patch("/api/v1/products/bulk")
+        .set("Authorization", `Bearer ${managerToken}`)
+        .set("Idempotency-Key", `v804.product.bulk-update.${label}`)
+        .send([
+          {
+            id: products[0]._id.toString(),
+            name: "Must Not Be Updated",
+            expectedVersion: products[0].version,
+          },
+          {
+            id: products[1]._id.toString(),
+            name: buildName(marker),
+            expectedVersion: products[1].version,
+          },
+        ]);
+
+      expectV1ProductNameTypeError(response, "[1].name");
+      expect(updateProductsBulkSpy).not.toHaveBeenCalled();
+      await expect(
+        Product.find({}).sort({ _id: 1 }).lean()
+      ).resolves.toEqual(productsBefore);
+      expect(await captureProductMutationCounts()).toEqual(countsBefore);
+      expect(JSON.stringify(response.body)).not.toContain(marker);
+    }
+  );
+
+  it("rejects a structural product name equivalently on the legacy create route", async () => {
+    const managerToken = await createManagerToken();
+    const marker = "V804-PRODUCT-LEGACY-OBJECT";
+    const before = await captureProductMutationCounts();
+    const createProductSpy = jest.spyOn(productService, "createProduct");
+
+    const response = await request(app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .set("Idempotency-Key", "v804.product.legacy.object")
+      .send({
+        sku: "V804-LEGACY-OBJECT",
+        name: { marker },
+      });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      message: "Validation failed",
+      errors: expect.arrayContaining([
+        { field: "name", message: PRODUCT_NAME_TYPE_MESSAGE },
+      ]),
+    });
+    expect(createProductSpy).not.toHaveBeenCalled();
+    expect(await captureProductMutationCounts()).toEqual(before);
+    expect(JSON.stringify(response.body)).not.toContain(marker);
   });
 });

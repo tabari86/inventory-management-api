@@ -19,6 +19,12 @@ const createProductValidation = [
     .withMessage("SKU may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("name")
+    .exists()
+    .withMessage("Product name is required")
+    .bail()
+    .isString()
+    .withMessage("Product name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Product name is required")
@@ -81,6 +87,9 @@ const updateProductValidation = [
 
   body("name")
     .optional()
+    .isString()
+    .withMessage("Product name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Product name cannot be empty")
@@ -148,6 +157,12 @@ const createBulkProductsValidation = [
     .withMessage("SKU may only contain uppercase letters, numbers, dashes and underscores"),
 
   body("*.name")
+    .exists()
+    .withMessage("Product name is required")
+    .bail()
+    .isString()
+    .withMessage("Product name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Product name is required")
@@ -221,6 +236,9 @@ const updateBulkProductsValidation = [
 
   body("*.name")
     .optional()
+    .isString()
+    .withMessage("Product name must be a string")
+    .bail()
     .trim()
     .notEmpty()
     .withMessage("Product name cannot be empty")

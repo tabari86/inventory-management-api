@@ -2,7 +2,9 @@ const bcrypt = require("bcrypt");
 const request = require("supertest");
 
 const app = require("../src/app");
+const { logger } = require("../src/config/logger");
 const User = require("../src/models/User");
+const userService = require("../src/services/userService");
 const {
   createAdminToken,
   createManagerToken,
@@ -27,6 +29,45 @@ const REJECTED_PASSWORD_BOUNDARIES = [
 const USER_CREATION_ROUTES = [
   ["canonical", "/api/v1/users", "v1"],
   ["legacy", "/api/users", "legacy"],
+];
+const NAME_TYPE_MESSAGE = "Name must be a string";
+const MALFORMED_USER_NAME_CASES = [
+  {
+    caseName: "object",
+    caseKey: "object",
+    createValue: (marker) => ({ probe: marker }),
+    hasMarker: true,
+  },
+  {
+    caseName: "array",
+    caseKey: "array",
+    createValue: (marker) => [marker],
+    hasMarker: true,
+  },
+  {
+    caseName: "number",
+    caseKey: "number",
+    createValue: () => 804,
+    hasMarker: false,
+  },
+  {
+    caseName: "boolean",
+    caseKey: "boolean",
+    createValue: () => true,
+    hasMarker: false,
+  },
+  {
+    caseName: "null",
+    caseKey: "null",
+    createValue: () => null,
+    hasMarker: false,
+  },
+  {
+    caseName: "Mongo-like object",
+    caseKey: "mongo-like",
+    createValue: () => ({ $gt: "" }),
+    hasMarker: false,
+  },
 ];
 
 describe("User API", () => {
@@ -153,6 +194,110 @@ describe("User API", () => {
 
     expect(response.statusCode).toBe(400);
     expect(await User.findOne({ email: "blank.name@example.com" })).toBeNull();
+  });
+
+  describe("name input structure", () => {
+    it.each(MALFORMED_USER_NAME_CASES)(
+      "rejects a canonical $caseName name before service, hashing, or persistence",
+      async ({ caseKey, createValue, hasMarker }) => {
+        const adminToken = await createAdminToken();
+        const email = `v804.${caseKey}@example.com`;
+        const marker = `v804-${caseKey}-submitted-marker`;
+        const createUserSpy = jest.spyOn(userService, "createUser");
+        const hashSpy = jest.spyOn(bcrypt, "hash");
+        const userCreateSpy = jest.spyOn(User, "create");
+        const logSpy = jest.spyOn(logger, "log");
+
+        const response = await request(app)
+          .post("/api/v1/users")
+          .set("Authorization", `Bearer ${adminToken}`)
+          .send({
+            name: createValue(marker),
+            email,
+            password: "Password123",
+            role: "viewer",
+          });
+
+        expect(response.statusCode).toBe(400);
+        expect(response.body).toMatchObject({
+          type: "inventory-error",
+          title: "Validation failed",
+          status: 400,
+          code: "VALIDATION_FAILED",
+          detail: "Validation failed",
+          retryable: false,
+          errors: [{ field: "name", message: NAME_TYPE_MESSAGE }],
+        });
+        expect(createUserSpy).not.toHaveBeenCalled();
+        expect(hashSpy).not.toHaveBeenCalled();
+        expect(userCreateSpy).not.toHaveBeenCalled();
+        expect(await User.collection.findOne({ email })).toBeNull();
+        if (hasMarker) {
+          expect(logSpy).toHaveBeenCalled();
+          expect(JSON.stringify(response.body)).not.toContain(marker);
+          expect(JSON.stringify(logSpy.mock.calls)).not.toContain(marker);
+        }
+      }
+    );
+
+    it("accepts and trims a canonical surrounding-whitespace string name", async () => {
+      const adminToken = await createAdminToken();
+      const email = "v804.trimmed@example.com";
+
+      const response = await request(app)
+        .post("/api/v1/users")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({
+          name: "  V804 Trimmed User  ",
+          email,
+          password: "Password123",
+          role: "viewer",
+        });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.body.data).toMatchObject({
+        name: "V804 Trimmed User",
+        email,
+        role: "viewer",
+        status: "active",
+      });
+      expect(await User.collection.findOne({ email })).toMatchObject({
+        name: "V804 Trimmed User",
+      });
+    });
+
+    it("rejects a legacy object name before service or persistence", async () => {
+      const adminToken = await createAdminToken();
+      const email = "v804.legacy-object@example.com";
+      const marker = "v804-legacy-object-submitted-marker";
+      const createUserSpy = jest.spyOn(userService, "createUser");
+      const hashSpy = jest.spyOn(bcrypt, "hash");
+      const userCreateSpy = jest.spyOn(User, "create");
+      const logSpy = jest.spyOn(logger, "log");
+
+      const response = await request(app)
+        .post("/api/users")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({
+          name: { probe: marker },
+          email,
+          password: "Password123",
+          role: "viewer",
+        });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toEqual({
+        message: "Validation failed",
+        errors: [{ field: "name", message: NAME_TYPE_MESSAGE }],
+      });
+      expect(createUserSpy).not.toHaveBeenCalled();
+      expect(hashSpy).not.toHaveBeenCalled();
+      expect(userCreateSpy).not.toHaveBeenCalled();
+      expect(await User.collection.findOne({ email })).toBeNull();
+      expect(logSpy).toHaveBeenCalled();
+      expect(JSON.stringify(response.body)).not.toContain(marker);
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain(marker);
+    });
   });
 
   describe.each(USER_CREATION_ROUTES)(
