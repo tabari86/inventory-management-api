@@ -4,6 +4,7 @@ const app = require("../src/app");
 const swaggerSpec = require("../src/config/swagger");
 const { createErrorHandler } = require("../src/middleware/errorHandler");
 const AuditEvent = require("../src/models/AuditEvent");
+const IdempotencyRecord = require("../src/models/IdempotencyRecord");
 const OutboxEvent = require("../src/models/OutboxEvent");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
@@ -374,6 +375,58 @@ describe("WP7 API routing and HTTP contracts", () => {
       404,
       "RESOURCE_NOT_FOUND"
     );
+  });
+
+  it("preserves the JSON byte boundary and returns the static legacy 413 contract without side effects", async () => {
+    const limitBytes = 102400;
+    const emptyBodyBytes = Buffer.byteLength(JSON.stringify({ probe: "" }), "utf8");
+    const atLimitBody = JSON.stringify({
+      probe: "A".repeat(limitBytes - emptyBodyBytes),
+    });
+    const aboveLimitBody = atLimitBody.replace("A", "é");
+    const modelCounts = () =>
+      Promise.all([
+        Product.countDocuments(),
+        IdempotencyRecord.countDocuments(),
+        AuditEvent.countDocuments(),
+        OutboxEvent.countDocuments(),
+      ]);
+    const before = await modelCounts();
+
+    expect(atLimitBody).toHaveLength(limitBytes);
+    expect(Buffer.byteLength(atLimitBody, "utf8")).toBe(limitBytes);
+    expect(aboveLimitBody).toHaveLength(atLimitBody.length);
+    expect(Buffer.byteLength(aboveLimitBody, "utf8")).toBe(limitBytes + 1);
+
+    const accepted = await request(app)
+      .post("/api/v1/products")
+      .set("Content-Type", "application/json")
+      .send(atLimitBody);
+    const rejected = await request(app)
+      .post("/api/products")
+      .set("Content-Type", "application/json")
+      .set("X-Request-ID", "v805-legacy-request")
+      .set("X-Correlation-ID", "v805-legacy-correlation")
+      .send(aboveLimitBody);
+    const malformedLegacy = await request(app)
+      .post("/api/products")
+      .set("Content-Type", "application/json")
+      .send('{"sku":');
+
+    expectV1Error(accepted, 401, "AUTHENTICATION_REQUIRED");
+    expect(rejected.statusCode).toBe(413);
+    expect(rejected.body).toEqual({
+      message: "JSON request body is too large",
+    });
+    expect(rejected.headers["x-request-id"]).toBe("v805-legacy-request");
+    expect(rejected.headers["x-correlation-id"]).toBe(
+      "v805-legacy-correlation"
+    );
+    expect(malformedLegacy.statusCode).toBe(400);
+    expect(malformedLegacy.body).toEqual({
+      message: "Unexpected end of JSON input",
+    });
+    await expect(modelCounts()).resolves.toEqual(before);
   });
 
   it("maps DomainError and internal failures without exposing internal details", async () => {

@@ -44,8 +44,8 @@ const parameterName = (parameter) => {
   return parameter.$ref;
 };
 
-const documentedOperations = () =>
-  Object.entries(swaggerSpec.paths).flatMap(([path, pathItem]) =>
+const documentedOperations = (document = swaggerSpec) =>
+  Object.entries(document.paths).flatMap(([path, pathItem]) =>
     Object.entries(pathItem)
       .filter(([method]) => httpMethods.has(method))
       .map(([method, operation]) => ({ method, path, operation }))
@@ -216,6 +216,52 @@ describe("Swagger/OpenAPI specification", () => {
         },
       },
     });
+  });
+
+  it("documents payload-too-large responses for every JSON-body operation", () => {
+    const canonicalOperations = documentedOperations(loadSwaggerSpec()).filter(
+      ({ path }) => path.startsWith("/api/v1/")
+    );
+    const jsonBodyOperations = canonicalOperations.filter(
+      ({ operation }) =>
+        operation.requestBody?.content?.["application/json"] !== undefined
+    );
+    const nonJsonBodyOperations = canonicalOperations.filter(
+      ({ operation }) =>
+        operation.requestBody?.content?.["application/json"] === undefined
+    );
+
+    expect(jsonBodyOperations.length).toBeGreaterThan(0);
+    for (const { operation } of jsonBodyOperations) {
+      expect(operation.responses["413"]).toMatchObject({
+        description: "JSON request body is too large",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/V1Error" },
+          },
+        },
+        "x-error-codes": ["PAYLOAD_TOO_LARGE"],
+      });
+    }
+
+    expect(
+      jsonBodyOperations[0].operation.responses["413"].content[
+        "application/json"
+      ].example
+    ).toEqual({
+      type: "inventory-error",
+      title: "Payload too large",
+      status: 413,
+      code: "PAYLOAD_TOO_LARGE",
+      detail: "JSON request body is too large",
+      requestId: expect.any(String),
+      correlationId: expect.any(String),
+      retryable: false,
+      errors: [],
+    });
+    for (const { operation } of nonJsonBodyOperations) {
+      expect(operation.responses?.["413"]).toBeUndefined();
+    }
   });
 
   it("documents the corrected Stock bulk and Product archive machine codes", () => {

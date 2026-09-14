@@ -9,6 +9,7 @@ const errorCodes = require("../errors/errorCodes");
 const { sendError } = require("../http/contract");
 
 const MAX_ERROR_CAUSE_DEPTH = 5;
+const PAYLOAD_TOO_LARGE_MESSAGE = "JSON request body is too large";
 const DATABASE_OPERATIONAL_ERROR_TYPES = Object.freeze([
   mongoose.mongo.MongoClientClosedError,
   mongoose.mongo.MongoNetworkError,
@@ -53,22 +54,31 @@ const createErrorHandler = (logger = defaultLogger) =>
   function errorHandler(error, req, res, _next) {
     const malformedJson =
       error instanceof SyntaxError && error.status === 400 && "body" in error;
+    const oversizedJson =
+      error?.type === "entity.too.large" &&
+      (error.status === 413 || error.statusCode === 413);
     const isDomainError = error instanceof DomainError;
     const statusCode = malformedJson
       ? 400
-      : isDomainError
-        ? error.httpStatus
-        : error.statusCode || 500;
+      : oversizedJson
+        ? 413
+        : isDomainError
+          ? error.httpStatus
+          : error.statusCode || 500;
     const hideInternalDetails =
       process.env.NODE_ENV === "production" && statusCode >= 500;
-    const clientMessage = isDomainError
-      ? error.safeMessage
-      : error.clientMessage || error.message;
+    const clientMessage = oversizedJson
+      ? PAYLOAD_TOO_LARGE_MESSAGE
+      : isDomainError
+        ? error.safeMessage
+        : error.clientMessage || error.message;
     const code = malformedJson
       ? errorCodes.VALIDATION_FAILED
-      : isDomainError
-        ? error.code
-        : errorCodes.INTERNAL_ERROR;
+      : oversizedJson
+        ? errorCodes.PAYLOAD_TOO_LARGE
+        : isDomainError
+          ? error.code
+          : errorCodes.INTERNAL_ERROR;
     const applicationError = {
       code,
       statusCode,
@@ -87,22 +97,26 @@ const createErrorHandler = (logger = defaultLogger) =>
       ...(failureClass ? { failureClass } : {}),
     });
 
-    const legacyMessage = hideInternalDetails
-      ? "Internal server error"
-      : clientMessage || "Internal server error";
+    const legacyMessage = oversizedJson
+      ? PAYLOAD_TOO_LARGE_MESSAGE
+      : hideInternalDetails
+        ? "Internal server error"
+        : clientMessage || "Internal server error";
     const detail = malformedJson
       ? "Malformed JSON request body"
-      : statusCode >= 500
-        ? "An unexpected error occurred"
-        : clientMessage || "Request failed";
+      : oversizedJson
+        ? PAYLOAD_TOO_LARGE_MESSAGE
+        : statusCode >= 500
+          ? "An unexpected error occurred"
+          : clientMessage || "Request failed";
 
     return sendError(req, res, {
       statusCode,
       code,
-      title: error.title,
+      title: oversizedJson ? undefined : error.title,
       detail,
       retryable: applicationError.retryable,
-      errors: error.errors,
+      errors: oversizedJson ? [] : error.errors,
       legacyMessage,
     });
   };

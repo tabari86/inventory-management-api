@@ -956,6 +956,41 @@ for (const [path, pathItem] of Object.entries(swaggerSpec.paths)) {
   }
 }
 
+const createPayloadTooLargeResponse = () => ({
+  description: "JSON request body is too large",
+  content: {
+    "application/json": {
+      schema: { $ref: "#/components/schemas/V1Error" },
+      example: {
+        type: "inventory-error",
+        title: "Payload too large",
+        status: 413,
+        code: "PAYLOAD_TOO_LARGE",
+        detail: "JSON request body is too large",
+        requestId: "request-id",
+        correlationId: "correlation-id",
+        retryable: false,
+        errors: [],
+      },
+    },
+  },
+  "x-error-codes": ["PAYLOAD_TOO_LARGE"],
+});
+
+for (const [path, pathItem] of Object.entries(swaggerSpec.paths)) {
+  if (!path.startsWith("/api/v1/")) continue;
+  for (const [method, operation] of Object.entries(pathItem)) {
+    if (
+      !httpMethods.has(method) ||
+      !operation.requestBody?.content?.["application/json"]
+    ) {
+      continue;
+    }
+    operation.responses ||= {};
+    operation.responses["413"] = createPayloadTooLargeResponse();
+  }
+}
+
 const hasHeaderParameter = (operation, name, reference) =>
   (operation.parameters || []).some(
     (parameter) =>

@@ -12,6 +12,7 @@ const ERROR_TITLES = Object.freeze({
   [errorCodes.INVALID_REFRESH_TOKEN]: "Invalid refresh token",
   [errorCodes.ACCESS_DENIED]: "Access denied",
   [errorCodes.RATE_LIMITED]: "Rate limit exceeded",
+  [errorCodes.PAYLOAD_TOO_LARGE]: "Payload too large",
   [errorCodes.VALIDATION_FAILED]: "Validation failed",
   [errorCodes.INVALID_CURSOR]: "Invalid cursor",
   [errorCodes.RESOURCE_NOT_FOUND]: "Resource not found",

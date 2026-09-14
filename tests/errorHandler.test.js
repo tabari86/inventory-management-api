@@ -71,6 +71,121 @@ describe("Global error handler", () => {
     }
   );
 
+  it("maps oversized JSON separately from malformed JSON", () => {
+    process.env.NODE_ENV = "test";
+    const logger = { log: jest.fn() };
+    const handler = createErrorHandler(logger);
+    const oversizedResponse = createResponse();
+    const dependencyMessage = "PARSER_DEPENDENCY_MESSAGE_V805";
+    const oversizedError = new Error(dependencyMessage);
+    oversizedError.type = "entity.too.large";
+    oversizedError.status = 413;
+    oversizedError.statusCode = 413;
+    oversizedError.expose = true;
+
+    handler(
+      oversizedError,
+      {
+        apiContractVersion: "v1",
+        applicationContext: {
+          requestId: "v805-handler-request",
+          correlationId: "v805-handler-correlation",
+        },
+      },
+      oversizedResponse,
+      jest.fn()
+    );
+
+    expect(oversizedResponse.status).toHaveBeenCalledWith(413);
+    expect(oversizedResponse.json).toHaveBeenCalledWith({
+      type: "inventory-error",
+      title: "Payload too large",
+      status: 413,
+      code: "PAYLOAD_TOO_LARGE",
+      detail: "JSON request body is too large",
+      requestId: "v805-handler-request",
+      correlationId: "v805-handler-correlation",
+      retryable: false,
+      errors: [],
+    });
+    expect(logger.log).toHaveBeenNthCalledWith(1, "application_error", {
+      requestId: "v805-handler-request",
+      correlationId: "v805-handler-correlation",
+      statusCode: 413,
+      errorCode: "PAYLOAD_TOO_LARGE",
+      retryable: false,
+    });
+    expect(JSON.stringify(oversizedResponse.json.mock.calls)).not.toContain(
+      dependencyMessage
+    );
+    expect(JSON.stringify(logger.log.mock.calls)).not.toContain(
+      dependencyMessage
+    );
+
+    const malformedResponse = createResponse();
+    const malformedError = new SyntaxError("Unexpected end of JSON input");
+    malformedError.type = "entity.parse.failed";
+    malformedError.status = 400;
+    malformedError.statusCode = 400;
+    malformedError.body = '{"sku":';
+
+    handler(
+      malformedError,
+      {
+        apiContractVersion: "v1",
+        applicationContext: {
+          requestId: "v805-malformed-request",
+          correlationId: "v805-malformed-correlation",
+        },
+      },
+      malformedResponse,
+      jest.fn()
+    );
+
+    expect(malformedResponse.status).toHaveBeenCalledWith(400);
+    expect(malformedResponse.json).toHaveBeenCalledWith({
+      type: "inventory-error",
+      title: "Validation failed",
+      status: 400,
+      code: errorCodes.VALIDATION_FAILED,
+      detail: "Malformed JSON request body",
+      requestId: "v805-malformed-request",
+      correlationId: "v805-malformed-correlation",
+      retryable: false,
+      errors: [],
+    });
+
+    for (const nearMiss of [
+      { type: "entity.too.large", status: 400, statusCode: 400 },
+      { type: "entity.parse.failed", status: 413, statusCode: 413 },
+    ]) {
+      const nearMissResponse = createResponse();
+      const nearMissError = Object.assign(new Error("Near-miss parser error"), {
+        ...nearMiss,
+      });
+
+      handler(
+        nearMissError,
+        {
+          apiContractVersion: "v1",
+          applicationContext: {
+            requestId: "v805-near-miss-request",
+            correlationId: "v805-near-miss-correlation",
+          },
+        },
+        nearMissResponse,
+        jest.fn()
+      );
+
+      expect(nearMissResponse.json.mock.calls[0][0].code).toBe(
+        errorCodes.INTERNAL_ERROR
+      );
+      expect(nearMissResponse.json.mock.calls[0][0].code).not.toBe(
+        "PAYLOAD_TOO_LARGE"
+      );
+    }
+  });
+
   it("preserves typed DomainError fields and native cause internally", () => {
     const cause = new Error("internal database detail");
     const error = new DomainError({

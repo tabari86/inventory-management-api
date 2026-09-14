@@ -1,4 +1,5 @@
 const { EventEmitter } = require("events");
+const jwt = require("jsonwebtoken");
 const pino = require("pino");
 const request = require("supertest");
 
@@ -6,6 +7,7 @@ const { createLogger } = require("../src/config/logger");
 const { createApp } = require("../src/app");
 const { createHttpLogger } = require("../src/middleware/httpLogger");
 const authService = require("../src/services/authService");
+const productService = require("../src/services/productService");
 
 const createCapture = () => {
   const output = [];
@@ -57,6 +59,120 @@ describe("Structured logging", () => {
     expect(output.join("")).not.toContain("QUERY_SECRET_V601");
     expect(output.join("")).not.toContain("AUTH_SECRET_V601");
     expect(output.join("")).not.toContain("IDEMPOTENCY_SECRET_V601");
+  });
+
+  it("logs an oversized JSON request as a safe pre-route client error", async () => {
+    const { output, destination } = createCapture();
+    const logger = createLogger({
+      destination,
+      environment: "production",
+      level: "info",
+    });
+    const bodyMarker = "BODY_SECRET_V805";
+    const passwordMarker = "PASSWORD_SECRET_V805";
+    const refreshTokenMarker = "REFRESH_TOKEN_SECRET_V805";
+    const authorizationMarker = "AUTHORIZATION_SECRET_V805";
+    const idempotencyMarker = "IDEMPOTENCY_SECRET_V805";
+    const body = {
+      probe: bodyMarker,
+      password: passwordMarker,
+      refreshToken: refreshTokenMarker,
+    };
+    const targetBytes = 102401;
+    const multibyteCharacters = 50000;
+    const baseBytes = Buffer.byteLength(JSON.stringify(body), "utf8");
+    body.probe +=
+      "é".repeat(multibyteCharacters) +
+      "A".repeat(targetBytes - baseBytes - multibyteCharacters * 2);
+    const serializedBody = JSON.stringify(body);
+    const verifySpy = jest.spyOn(jwt, "verify");
+    const serviceSpy = jest
+      .spyOn(productService, "createProduct")
+      .mockRejectedValue(new Error("SERVICE_REACHED_V805"));
+    const originalEnvironment = process.env.NODE_ENV;
+    let response;
+    let verifyCallCount;
+    let serviceCallCount;
+
+    expect(serializedBody.length).toBeLessThan(targetBytes);
+    expect(Buffer.byteLength(serializedBody, "utf8")).toBe(targetBytes);
+
+    try {
+      process.env.NODE_ENV = "production";
+      response = await request(createApp({ logger }))
+        .post("/api/v1/products")
+        .set("Content-Type", "application/json")
+        .set("X-Request-ID", "v805-logger-request")
+        .set("X-Correlation-ID", "v805-logger-correlation")
+        .set("Authorization", `Bearer ${authorizationMarker}`)
+        .set("Idempotency-Key", idempotencyMarker)
+        .send(serializedBody);
+      verifyCallCount = verifySpy.mock.calls.length;
+      serviceCallCount = serviceSpy.mock.calls.length;
+    } finally {
+      verifySpy.mockRestore();
+      serviceSpy.mockRestore();
+      process.env.NODE_ENV = originalEnvironment;
+    }
+    logger.flush();
+
+    expect(verifyCallCount).toBe(0);
+    expect(serviceCallCount).toBe(0);
+    expect(response.statusCode).toBe(413);
+    expect(response.body).toEqual({
+      type: "inventory-error",
+      title: "Payload too large",
+      status: 413,
+      code: "PAYLOAD_TOO_LARGE",
+      detail: "JSON request body is too large",
+      requestId: "v805-logger-request",
+      correlationId: "v805-logger-correlation",
+      retryable: false,
+      errors: [],
+    });
+
+    const rawOutput = output.join("");
+    const records = rawOutput
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map(JSON.parse);
+    const applicationError = records.find(
+      ({ event }) => event === "application_error"
+    );
+    const terminal = records.find(
+      ({ event }) => event === "http_request_completed"
+    );
+
+    expect(applicationError).toMatchObject({
+      requestId: "v805-logger-request",
+      correlationId: "v805-logger-correlation",
+      statusCode: 413,
+      errorCode: "PAYLOAD_TOO_LARGE",
+      retryable: false,
+    });
+    expect(applicationError).not.toHaveProperty("failureClass");
+    expect(terminal).toMatchObject({
+      requestId: "v805-logger-request",
+      correlationId: "v805-logger-correlation",
+      method: "POST",
+      path: "/unresolved",
+      statusCode: 413,
+      errorCode: "PAYLOAD_TOO_LARGE",
+      retryable: false,
+      idempotencyKeyPresent: true,
+    });
+    for (const marker of [
+      bodyMarker,
+      passwordMarker,
+      refreshTokenMarker,
+      authorizationMarker,
+      idempotencyMarker,
+      "request entity too large",
+      "SERVICE_REACHED_V805",
+    ]) {
+      expect(rawOutput).not.toContain(marker);
+      expect(JSON.stringify(response.body)).not.toContain(marker);
+    }
   });
 
   it("preserves full safe route context for propagated errors", async () => {
