@@ -607,6 +607,63 @@ describe("Swagger/OpenAPI specification", () => {
     expect(warehouseSchema.properties.code).toBeUndefined();
   });
 
+  it("requires update identity and version plus a genuine update field", () => {
+    const cases = [
+      {
+        name: "product single",
+        schema:
+          swaggerSpec.paths["/api/v1/products/{id}"].patch.requestBody.content[
+            "application/json"
+          ].schema,
+        required: ["expectedVersion"],
+        updateFields: ["sku", "name", "description", "unit", "status"],
+      },
+      {
+        name: "product bulk item",
+        schema:
+          swaggerSpec.paths["/api/v1/products/bulk"].patch.requestBody.content[
+            "application/json"
+          ].schema.items,
+        required: ["id", "expectedVersion"],
+        updateFields: ["sku", "name", "description", "unit", "status"],
+      },
+      {
+        name: "warehouse single",
+        schema:
+          swaggerSpec.paths["/api/v1/warehouses/{id}"].patch.requestBody.content[
+            "application/json"
+          ].schema,
+        required: ["expectedVersion"],
+        updateFields: ["name", "description", "status"],
+      },
+      {
+        name: "warehouse bulk item",
+        schema:
+          swaggerSpec.paths["/api/v1/warehouses/bulk"].patch.requestBody.content[
+            "application/json"
+          ].schema.items,
+        required: ["id", "expectedVersion"],
+        updateFields: ["name", "description", "status"],
+      },
+    ];
+
+    expect(
+      cases.map(({ name, schema }) => ({
+        name,
+        required: schema.required,
+        updateFieldAlternatives: schema.anyOf,
+      }))
+    ).toEqual(
+      cases.map(({ name, required, updateFields }) => ({
+        name,
+        required,
+        updateFieldAlternatives: updateFields.map((field) => ({
+          required: [field],
+        })),
+      }))
+    );
+  });
+
   it("requires expectedVersion for bulk updates and lifecycle commands", () => {
     const productBulk =
       swaggerSpec.paths["/api/v1/products/bulk"].patch.requestBody.content[

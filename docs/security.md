@@ -136,14 +136,14 @@ priority, followed by realistically exposed direct findings and compatible
 patch/minor updates. Major or forced upgrades are not used to make audit output
 look cleaner. `npm audit --omit=dev --audit-level=high` is a release gate.
 
-The full audit is also reviewed. At the WP8 local audit, production dependencies
-had no reported vulnerabilities after compatible updates. The remaining High
-reports belong to Jest's development-only minimatch/brace-expansion chain. That
-code is not installed in the production image and receives repository-controlled
-test patterns rather than public API input. A forced override or the audit's
-suggested incompatible Jest change was not accepted; the toolchain must be
-updated when a compatible upstream dependency graph is available. This is a
-documented development-tooling limitation, not a bypass of the production gate.
+The full audit is also reviewed. Current WP8 evidence records zero production
+vulnerabilities. The remaining transitive development-tooling findings involve
+`brace-expansion`, `browserslist`, `baseline-browser-mapping`, and nested
+`js-yaml`. They are absent from the production dependency tree and image, are
+not part of the public API runtime, and have controlled tooling exposure. A
+compatible maintenance refresh exists but is deliberately deferred to a
+controlled tooling-maintenance task; no forced upgrade is used merely to make
+audit output zero.
 
 GitHub Actions uses read-only repository permissions, a bounded job, deterministic
 `npm ci`, production and full audit checks, repository and syntax verification,

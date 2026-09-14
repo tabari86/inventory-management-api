@@ -1,9 +1,10 @@
 # Final Phase 1 audit
 
-Audit date: 2026-07-29. Scope: repository state and local WP8 verification at
-the end of Phase 1, plus production evidence explicitly supplied by the
-repository owner. Local checks do not establish post-WP8 GitHub Actions, Render,
-or MongoDB Atlas behavior.
+Audit date: 2026-07-29; WP8 closure evidence updated 2026-09-14. Scope:
+repository state, local WP8 verification, exact-SHA GitHub Actions evidence,
+and production evidence explicitly supplied by the repository owner. The
+evidence does not replace the remaining WP9-WP11 verification packages or a
+comprehensive all-collection production smoke record.
 
 Status vocabulary:
 
@@ -18,7 +19,7 @@ Status vocabulary:
 
 | # | Area | Status | Evidence and limitation |
 |---:|---|---|---|
-| 1 | Repository integrity | PASS | Mandatory safety gate found clean `main` at `6ef285c`; `git diff --check` and `npm run verify:security` are final local gates. |
+| 1 | Repository integrity | PASS | The WP8 closure baseline was clean `main` at `c3e1b5a84e23188e212210c70120d33bbe9754e2`, identical to `origin/main` with ahead/behind `0 / 0`; `git diff --check` and `npm run verify:security` remain final local gates. |
 | 2 | Architecture boundaries | PASS | `src/routes`, `src/controllers`, `src/services`, `src/models`, and `docs/architecture.md` describe and implement the modular-monolith boundaries. |
 | 3 | Domain-service separation | PASS | Inventory/lifecycle logic is in `src/services`; controllers translate HTTP input/output. `tests/inventoryService.test.js` and `tests/stockService.test.js` exercise services without Express. |
 | 4 | Transaction safety | PASS | `src/utils/transaction.js`, `src/services/idempotencyExecutor.js`, and `tests/transaction.test.js`/`tests/inventoryWorkflow.test.js` verify session-bound atomic mutations. |
@@ -42,25 +43,25 @@ Status vocabulary:
 | 22 | Input validation | PASS | Resource validators, `validateRequest`, bounded JSON/query utilities, v1 error presentation, and route/API tests cover body, parameter, header, and query rejection. |
 | 23 | Environment validation | PASS | `src/config/environment.js`, startup/database injection, seed-only parsing, and `tests/environment.test.js`/`tests/server.test.js` verify required values, bounds, normalization, fail-fast, and no connection after invalid configuration. |
 | 24 | Production secret policy | PASS | Placeholder/length rejection, `.gitignore`, `.env.example`, `scripts/verifyRepositorySecurity.js`, security/seed tests, and `docs/security.md` provide enforceable repository and runtime policy without exposing values. |
-| 25 | Dependency security | PASS WITH LIMITATION | `npm audit --omit=dev --audit-level=high` is clean after compatible production updates. Full audit reports the development-only Jest minimatch/brace-expansion chain as High; it is omitted from the image and awaits a compatible upstream graph rather than a forced override. |
+| 25 | Dependency security | PASS WITH LIMITATION | The production audit reports zero vulnerabilities. Current full-audit findings are transitive development tooling (`brace-expansion`, `browserslist`, `baseline-browser-mapping`, and nested `js-yaml`), absent from the production tree/image and public runtime. A compatible maintenance refresh is deliberately deferred to controlled tooling maintenance; no forced upgrade is justified. |
 | 26 | Swagger exposure | PASS | `src/app.js` keeps unauthenticated `/api-docs` intentionally; `tests/app.test.js` verifies public HTML and `docs/security.md` records the portfolio/demo decision. |
-| 27 | OpenAPI validity | PASS | `npm run validate:openapi`, Swagger Parser, `tests/swagger.test.js`, and public-content checks verify schema validity, canonical paths, auth/error/pagination contracts, URLs, and absence of sensitive literals. |
+| 27 | OpenAPI validity | PASS | `npm run validate:openapi`, Swagger Parser, `tests/swagger.test.js`, and public-content checks verify schema validity, canonical paths, auth/error/pagination contracts, Product/Warehouse update identity/version plus genuine-field requirements, URLs, and absence of sensitive literals. |
 | 28 | Automated tests | PASS | Final `npm test` runs all Jest/Supertest/unit/integration/configuration suites using the transaction-capable memory replica set; no test is weakened or skipped for WP8. |
-| 29 | CI gates | PASS WITH LIMITATION | `.github/workflows/ci.yml` has read-only permissions, timeout, install/audit/security/syntax/test/OpenAPI/Docker/Compose/runtime gates. Local configuration tests pass; the changed workflow has not yet run on GitHub. |
-| 30 | Docker image | PASS | `Dockerfile`, local `docker build --tag inventory-management-api:wp8 .`, image inspection, and Docker smoke verification establish Node 22 Alpine, production-only dependencies, port 3000, and non-root `node`. |
-| 31 | Docker Compose | PASS | `docker compose config --quiet` and `npm run verify:docker` verify the local MongoDB replica set, isolated ports/project, readiness, health, non-root process, shutdown, and deterministic volume cleanup. |
+| 29 | CI gates | PASS | `.github/workflows/ci.yml` has read-only permissions, timeout, install/audit/security/syntax/test/OpenAPI/Docker/Compose/runtime gates. Exact-SHA GitHub Actions run `34820741069` passed for committed WP8 baseline `c3e1b5a84e23188e212210c70120d33bbe9754e2`; each later push remains subject to the same gates. |
+| 30 | Docker image | PASS | `Dockerfile`, local image inspection/smoke evidence, and the exact-SHA CI image build/runtime gate establish Node 22 Alpine, production-only dependencies, port 3000, and non-root `node`. |
+| 31 | Docker Compose | PASS | Local and exact-SHA CI evidence verifies Compose configuration, the isolated MongoDB replica set/runtime, readiness, health, non-root process, shutdown, and deterministic volume cleanup. |
 | 32 | Migration procedures | PASS | `docs/production-data-notes.md` is the authoritative dry-run-first runbook for all four scripts, order, blockers, re-runs, verification, cautions, and rollback limits. |
 | 33 | Architecture documentation | PASS | `docs/architecture.md` covers layers, transactions, lifecycle/version rules, contexts, contracts, reads/indexes, runtime, deployment/CI, trust boundaries, migrations, and intentional limits. |
 | 34 | Security documentation | PASS | `docs/security.md` covers auth/RBAC, tokens, validation, headers/rate limit, traceability/idempotency, secrets, seed, audit policy, CI, Swagger, incident response, and limits. |
-| 35 | Production rollout evidence | PASS WITH LIMITATION | Supplied evidence: WP7 commit pushed; GitHub Actions passed; Render reported live; lifecycle and API read indexes reported applied/verified; auth, v1 envelope, legacy compatibility, and bounded Product read smoke-tested. No conclusive single-run smoke record exists for every collection, and WP8 is not deployed. |
-| 36 | Phase 1 completion status | PASS WITH LIMITATION | WP8 is locally release-hardened with no known production High/Critical dependency finding or local release blocker. Commit, remote CI, deployment, and post-WP8 production smoke verification remain owner-controlled follow-up actions. |
+| 35 | Production rollout evidence | PASS WITH LIMITATION | The committed WP8 baseline passed exact-SHA GitHub Actions; Render subsequently reported live/ready and its deployed Swagger exposed the verified WP8 contract. Lifecycle and API read indexes were reported applied/verified, with auth, v1 envelope, legacy compatibility, and bounded Product read smoke evidence. No conclusive single-run smoke record exists for every collection. |
+| 36 | Phase 1 completion status | PASS WITH LIMITATION | WP8 release hardening has no known production Critical/High dependency finding or release blocker; the development-only advisory remainder is deferred with Low release relevance. Final Phase 1 acceptance remains pending WP9 cross-package adversarial integration, WP10 human engineering review, and the WP11 Definition of Done evidence matrix. |
 
 ## Phase 1 Definition of Done
 
 This is the authoritative acceptance table for the Phase 1 Definition of Done.
-Its overall status is **PASS WITH LIMITATION** until the owner-controlled
-commit, push, remote GitHub Actions run, Render deployment, and post-WP8
-production smoke verification are complete.
+The listed repository requirements have concrete WP8 evidence, but this does
+not declare Phase 1 accepted: WP9 cross-package adversarial integration, WP10
+human engineering review, and the WP11 final evidence matrix remain required.
 
 | # | Acceptance requirement | Status | Concrete evidence and limitation |
 |---:|---|---|---|
@@ -82,18 +83,18 @@ production smoke verification are complete.
 | 16 | Main list endpoints are bounded and cursor-paginated. | PASS | `src/services/readService.js` and `src/utils/cursorPagination.js` implement bounded `limit + 1` reads; `tests/pagination.test.js` and `tests/apiContract.test.js` verify cursors and maximum page sizes. |
 | 17 | Filters and sort fields are allowlisted. | PASS | Resource query definitions in `src/services/readService.js` and the resource validators use explicit allowlists; `tests/pagination.test.js` verifies rejection of unsupported filters and sort fields. |
 | 18 | Implemented indexes align with query patterns. | PASS | `src/config/apiReadIndexes.js` and `scripts/migrations/phase1ApiReadIndexes.js` map equality filters to cursor sorts; `tests/apiReadIndexMigration.test.js` and the local `npm test` gate verify the definitions/preflight. |
-| 19 | OpenAPI describes actual API behavior. | PASS | Product/Warehouse route annotations and `tests/swagger.test.js` require version preconditions, required lifecycle bodies, and Product bulk-archive `items` with `id` plus `expectedVersion`, while excluding the old IDs-only contract. Stock same-command duplicates document `VALIDATION_FAILED`, persisted collisions document `DUPLICATE_RESOURCE`, and active Product archive documents `INVALID_RESOURCE_STATE`. |
+| 19 | OpenAPI describes actual API behavior. | PASS | Product/Warehouse route annotations and `tests/swagger.test.js` require `expectedVersion`, bulk item `id`, and an exact `anyOf` genuine-update-field alternative for single and bulk updates, matching runtime validators and excluding `deactivationReason` alone. Lifecycle bodies and Product bulk-archive items retain their versioned contracts; Stock and archive error codes remain aligned. |
 | 20 | Tests run against MongoDB with replica-set transaction support. | PASS | `tests/setupTestDb.js` uses the MongoDB memory replica set, and the final local `npm test` command exercises the transaction suites against it. |
 | 21 | The previous test suite passes, or an explicit documented migration exists. | PASS | The final local `npm test` gate runs the complete prior and WP8 suite without skips; lifecycle/idempotency/audit/index data changes also have explicit scripts under `scripts/migrations` and the runbook in `docs/production-data-notes.md`. |
-| 22 | Docker and CI remain free of regression. | PASS WITH LIMITATION | `.github/workflows/ci.yml` includes install, audits, security, syntax, Jest, OpenAPI, Compose, image build, and runtime smoke steps; local `docker compose config --quiet` and `npm run verify:docker` pass, but the changed workflow has not yet run on GitHub. |
+| 22 | Docker and CI remain free of regression. | PASS | `.github/workflows/ci.yml` includes install, audits, security, syntax, Jest, OpenAPI, Compose, image build, and runtime smoke steps; local evidence and exact-SHA GitHub Actions run `34820741069` verify the committed WP8 baseline. Each later pushed SHA is rechecked by the same authoritative gates. |
 | 23 | No unintended secret is stored in logs, AuditEvent/OutboxEvent payloads, or non-authentication responses; authentication token issuance is the intentional authentication contract, not accidental exposure. | PASS | `src/config/logger.js`, `src/services/eventSnapshots.js`, `src/middleware/errorHandler.js`, and `scripts/verifyRepositorySecurity.js` enforce safe boundaries; `tests/logger.test.js`, `tests/auditOutboxCoverage.test.js`, `tests/errorHandler.test.js`, `tests/auth.test.js`, and `npm run verify:security` verify them. Login/refresh token issuance in `src/controllers/authController.js` is the documented intentional authentication response. |
 | 24 | No incomplete Agent, n8n, AWS, or future-domain capability exists in the repository. | PASS | The source inventory (`rg --files src scripts .github`) contains only the Phase 1 API/runtime/migration scope; `tests/swagger.test.js` verifies that no future API, event worker, or webhook contract is exposed, and `docs/architecture.md` records the intentional limits. |
-| 25 | Git changes are reviewable and each commit represents a real milestone. | PASS WITH LIMITATION | `git diff --check`, the focused file diff, and the local verification record make the unstaged WP8 change reviewable; the reviewed milestone commit has not yet been created, as required by this pre-commit pass. |
+| 25 | Git changes are reviewable and each commit represents a real milestone. | PASS | WP8 history contains scoped milestone commits, and the closure process requires focused diff review, `git diff --check`, candidate fingerprinting, owner staging, and staged-fingerprint verification before the final commit. |
 
 Definition of Done totals:
 
-- PASS: 23
-- PASS WITH LIMITATION: 2
+- PASS: 25
+- PASS WITH LIMITATION: 0
 - BLOCKED: 0
 
 ## Verification 1B-B transport-neutral context correction
@@ -119,7 +120,9 @@ and outbox context, keyed replay, actor-type scope separation, invalid-context
 rollback, exact pair matrices, HTTP compatibility, and the four accepted Batch
 A corrections. This remains a foundation only: no worker, scheduler, event
 consumer, webhook delivery, n8n workflow, queue integration, or service
-authentication is implemented, and Verification 1/Phase 1 remain open.
+authentication is implemented. Phase 1 acceptance remains open pending WP9
+cross-package adversarial integration, WP10 human engineering review, and the
+WP11 final Definition of Done evidence matrix.
 
 ## Deferred scope
 
@@ -145,11 +148,11 @@ authentication is implemented, and Verification 1/Phase 1 remain open.
 
 ## General audit totals
 
-- PASS: 32
-- PASS WITH LIMITATION: 4
+- PASS: 33
+- PASS WITH LIMITATION: 3
 - DEFERRED: 17
 - BLOCKED: 0
 
-The limitations are the development-only Jest advisory chain, lack of a
-post-change GitHub Actions run, incomplete all-collection production smoke
-evidence, and the owner-controlled post-WP8 commit/deploy/verification sequence.
+The remaining limitations are the controlled development-only tooling advisory
+set, incomplete all-collection production smoke evidence, and the pending
+WP9-WP11 Phase 1 acceptance gates.

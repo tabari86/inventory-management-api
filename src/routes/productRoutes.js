@@ -153,6 +153,17 @@ router.post(
  *               required:
  *                 - id
  *                 - expectedVersion
+ *               anyOf:
+ *                 - required:
+ *                     - sku
+ *                 - required:
+ *                     - name
+ *                 - required:
+ *                     - description
+ *                 - required:
+ *                     - unit
+ *                 - required:
+ *                     - status
  *               properties:
  *                 id:
  *                   type: string
@@ -417,6 +428,17 @@ router.post(
  *             minProperties: 1
  *             required:
  *               - expectedVersion
+ *             anyOf:
+ *               - required:
+ *                   - sku
+ *               - required:
+ *                   - name
+ *               - required:
+ *                   - description
+ *               - required:
+ *                   - unit
+ *               - required:
+ *                   - status
  *             properties:
  *               sku:
  *                 type: string

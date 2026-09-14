@@ -145,6 +145,13 @@ router.post(
  *               required:
  *                 - id
  *                 - expectedVersion
+ *               anyOf:
+ *                 - required:
+ *                     - name
+ *                 - required:
+ *                     - description
+ *                 - required:
+ *                     - status
  *               properties:
  *                 id:
  *                   type: string
@@ -323,6 +330,13 @@ router.post(
  *             minProperties: 1
  *             required:
  *               - expectedVersion
+ *             anyOf:
+ *               - required:
+ *                   - name
+ *               - required:
+ *                   - description
+ *               - required:
+ *                   - status
  *             properties:
  *               name:
  *                 type: string

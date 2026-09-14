@@ -788,8 +788,9 @@ Inventory Core mutation routes additionally support optional, actor-scoped
 idempotency for retry-safe HTTP execution. AuditEvent and OutboxEvent already
 exist and are persisted inside the same mutation transaction. Outbox delivery
 and machine identity remain future work. The canonical v1 HTTP contract is now
-implemented; mandatory optimistic preconditions remain a separate contract
-decision.
+implemented. Affected Product and Warehouse existing-aggregate commands require
+`expectedVersion` and enforce optimistic concurrency; updates also require at
+least one genuine updatable field.
 
 ### Request context and optional idempotency
 
@@ -1242,9 +1243,11 @@ central environment validation, public validated Swagger, security/release CI
 gates, and an isolated Docker runtime regression check.
 
 The detailed evidence and limitations are recorded in
-[`docs/phase1-audit.md`](docs/phase1-audit.md). The baseline deployment was
-externally reported live before WP8; the current unstaged WP8 changes have not
-been committed, pushed, deployed, or production-smoke tested.
+[`docs/phase1-audit.md`](docs/phase1-audit.md). WP8 release hardening is backed
+by local gates, exact-SHA GitHub Actions, and Render deployment/runtime evidence;
+the release workflow re-verifies each pushed SHA. Phase 1 acceptance remains
+gated by WP9 cross-package adversarial integration, WP10 human engineering
+review, and the WP11 final Definition of Done evidence matrix.
 
 ---
 
