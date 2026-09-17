@@ -1,5 +1,6 @@
 const request = require("supertest");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 
 const app = require("../src/app");
 const { logger } = require("../src/config/logger");
@@ -626,6 +627,72 @@ describe("Auth API", () => {
     expect(response.body.message).toBe("Current user retrieved successfully");
     expect(response.body.data.email).toBe("current.user@example.com");
     expect(response.body.data.role).toBe("manager");
+  });
+
+  it("forwards current-user database lookup failures to the v1 error boundary", async () => {
+    const user = await createTestUser({
+      name: "Lookup Failure User",
+      email: "lookup.failure@example.com",
+    });
+    const accessToken = createAccessToken(user);
+    const privateFailureMarker =
+      "WP10_C1_DATABASE_FAILURE mongodb://private-host.invalid/inventory";
+    const databaseFailure = new mongoose.mongo.MongoNetworkError(
+      privateFailureMarker
+    );
+    const logSpy = jest.spyOn(logger, "log");
+    const findByIdSpy = jest
+      .spyOn(User, "findById")
+      .mockRejectedValueOnce(databaseFailure);
+
+    const response = await request(app)
+      .get("/api/v1/auth/me")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(findByIdSpy).toHaveBeenCalledTimes(1);
+    expectV1Error(response, {
+      status: 500,
+      code: "INTERNAL_ERROR",
+      title: "Internal server error",
+      detail: "An unexpected error occurred",
+    });
+    expect(response.body.errors).toEqual([]);
+    expect(JSON.stringify(response.body)).not.toContain(privateFailureMarker);
+    expect(JSON.stringify(response.body)).not.toMatch(/MongoNetworkError|stack/i);
+    expect(logSpy).toHaveBeenCalledWith(
+      "application_error",
+      expect.objectContaining({
+        requestId: expect.any(String),
+        correlationId: expect.any(String),
+        statusCode: 500,
+        errorCode: "INTERNAL_ERROR",
+        retryable: false,
+        failureClass: "DATABASE",
+      })
+    );
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain(
+      privateFailureMarker
+    );
+  });
+
+  it("rejects a verified access token with a malformed user id before lookup", async () => {
+    const accessToken = createAccessToken({
+      _id: "not-an-object-id",
+      role: "viewer",
+    });
+    const findByIdSpy = jest.spyOn(User, "findById");
+
+    const response = await request(app)
+      .get("/api/v1/auth/me")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expectV1Error(response, {
+      status: 401,
+      code: "INVALID_ACCESS_TOKEN",
+      title: "Invalid access token",
+      detail: "Invalid or expired access token",
+    });
+    expect(findByIdSpy).not.toHaveBeenCalled();
   });
 
   it("rotates a valid refresh token", async () => {
