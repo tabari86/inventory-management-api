@@ -305,13 +305,62 @@ describe("Global error handler", () => {
         cause,
       });
     const failureCases = [
-      ["v605-direct-database", databaseFailure, "DATABASE"],
-      ["v605-wrapped-database", internalError(databaseFailure), "DATABASE"],
-      ["v605-direct-application", applicationFailure, "APPLICATION"],
-      ["v605-wrapped-application", internalError(applicationFailure), "APPLICATION"],
-      ["v605-cyclic-application", cyclicApplicationFailure, "APPLICATION"],
-      ["v605-mongoose-validation", validationFailure, "APPLICATION"],
-      ["v605-mongoose-cast", castFailure, "APPLICATION"],
+      [
+        "v605-wrapped-database",
+        internalError(databaseFailure),
+        "DATABASE",
+        503,
+        errorCodes.DEPENDENCY_UNAVAILABLE,
+        true,
+      ],
+      [
+        "v605-direct-database",
+        databaseFailure,
+        "DATABASE",
+        503,
+        errorCodes.DEPENDENCY_UNAVAILABLE,
+        true,
+      ],
+      [
+        "v605-direct-application",
+        applicationFailure,
+        "APPLICATION",
+        500,
+        errorCodes.INTERNAL_ERROR,
+        false,
+      ],
+      [
+        "v605-wrapped-application",
+        internalError(applicationFailure),
+        "APPLICATION",
+        500,
+        errorCodes.INTERNAL_ERROR,
+        false,
+      ],
+      [
+        "v605-cyclic-application",
+        cyclicApplicationFailure,
+        "APPLICATION",
+        500,
+        errorCodes.INTERNAL_ERROR,
+        false,
+      ],
+      [
+        "v605-mongoose-validation",
+        validationFailure,
+        "APPLICATION",
+        500,
+        errorCodes.INTERNAL_ERROR,
+        false,
+      ],
+      [
+        "v605-mongoose-cast",
+        castFailure,
+        "APPLICATION",
+        500,
+        errorCodes.INTERNAL_ERROR,
+        false,
+      ],
     ];
     const typedCases = [
       ["v605-domain-stock", errorCodes.INSUFFICIENT_STOCK, 409, databaseFailure],
@@ -319,18 +368,23 @@ describe("Global error handler", () => {
       ["v605-domain-stale", errorCodes.STALE_VERSION, 409, databaseFailure],
       ["v605-domain-validation", errorCodes.VALIDATION_FAILED, 400, validationFailure],
     ];
-    const emit = (requestId, error) =>
+    const responses = new Map();
+    const emit = (requestId, error) => {
+      const response = createResponse();
       handler(
         error,
         {
+          apiContractVersion: "v1",
           applicationContext: {
             requestId,
             correlationId: `${requestId}-correlation`,
           },
         },
-        createResponse(),
+        response,
         jest.fn()
       );
+      responses.set(requestId, response);
+    };
     for (const [requestId, error] of failureCases) emit(requestId, error);
     for (const [requestId, code, httpStatus, cause] of typedCases) {
       emit(
@@ -358,27 +412,75 @@ describe("Global error handler", () => {
       .split(/\r?\n/)
       .filter(Boolean)
       .map(JSON.parse);
-    for (const [requestId, _error, failureClass] of failureCases) {
+    for (const [
+      requestId,
+      _error,
+      failureClass,
+      statusCode,
+      code,
+      retryable,
+    ] of failureCases) {
       expect(
         records.find((record) => record.requestId === requestId)
       ).toMatchObject({
         event: "application_error",
         requestId,
         correlationId: `${requestId}-correlation`,
-        statusCode: 500,
-        errorCode: errorCodes.INTERNAL_ERROR,
-        retryable: false,
+        statusCode,
+        errorCode: code,
+        retryable,
         failureClass,
       });
+      expect(responses.get(requestId).status).toHaveBeenCalledWith(statusCode);
+      expect(responses.get(requestId).json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: statusCode,
+          code,
+          detail:
+            code === errorCodes.DEPENDENCY_UNAVAILABLE
+              ? "Inventory dependency is unavailable"
+              : "An unexpected error occurred",
+          retryable,
+        })
+      );
     }
-    for (const [requestId] of typedCases) {
+    for (const [requestId, code, httpStatus] of typedCases) {
+      expect(
+        records.find((record) => record.requestId === requestId)
+      ).toMatchObject({
+        statusCode: httpStatus,
+        errorCode: code,
+        retryable: false,
+      });
       expect(
         records.find((record) => record.requestId === requestId)
       ).not.toHaveProperty("failureClass");
+      expect(responses.get(requestId).status).toHaveBeenCalledWith(httpStatus);
+      expect(responses.get(requestId).json).toHaveBeenCalledWith(
+        expect.objectContaining({ status: httpStatus, code, retryable: false })
+      );
     }
     expect(
       records.find(({ requestId }) => requestId === "v605-invalid-class")
     ).not.toHaveProperty("failureClass");
+    const legacyPrivateMarker = "LEGACY_DATABASE_SECRET_V605";
+    const legacyResponse = createResponse();
+    process.env.NODE_ENV = "test";
+    handler(
+      new mongoose.mongo.MongoNetworkError(legacyPrivateMarker),
+      {},
+      legacyResponse,
+      jest.fn()
+    );
+    expect(legacyResponse.status).toHaveBeenCalledWith(503);
+    expect(legacyResponse.json).toHaveBeenCalledWith({
+      message: "Inventory dependency is unavailable",
+    });
+    expect(JSON.stringify(legacyResponse.json.mock.calls)).not.toContain(
+      legacyPrivateMarker
+    );
+    logger.flush();
+    expect(output.join("")).not.toContain(legacyPrivateMarker);
     for (const marker of [
       "DATABASE_SECRET_V605",
       "APPLICATION_SECRET_V605",
@@ -391,6 +493,11 @@ describe("Global error handler", () => {
       "UNBOUNDED_FAILURE_CLASS_V605",
     ]) {
       expect(rawOutput).not.toContain(marker);
+      expect(
+        JSON.stringify(
+          [...responses.values()].map((response) => response.json.mock.calls)
+        )
+      ).not.toContain(marker);
     }
   });
 });

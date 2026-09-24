@@ -656,6 +656,11 @@ swaggerSpec.paths["/"] = {
   },
 };
 
+const movementTimestampContract =
+  "Timezone is mandatory; fractional seconds, when present, must contain 1 to 3 digits; impossible calendar dates are rejected; accepted values are normalized to canonical UTC with millisecond precision.";
+const movementTimestampPattern =
+  "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(?:\\.(\\d{1,3}))?(Z|([+-])(\\d{2}):(\\d{2}))$";
+
 swaggerSpec.components.parameters = {
   ...(swaggerSpec.components.parameters || {}),
   RequestId: {
@@ -779,15 +784,23 @@ swaggerSpec.components.parameters = {
     name: "from",
     in: "query",
     required: false,
-    description: "Inclusive createdAt lower bound with an explicit timezone.",
-    schema: { type: "string", format: "date-time" },
+    description: `Inclusive createdAt lower bound. ${movementTimestampContract}`,
+    schema: {
+      type: "string",
+      format: "date-time",
+      pattern: movementTimestampPattern,
+    },
   },
   MovementToFilter: {
     name: "to",
     in: "query",
     required: false,
-    description: "Inclusive createdAt upper bound with an explicit timezone.",
-    schema: { type: "string", format: "date-time" },
+    description: `Inclusive createdAt upper bound. ${movementTimestampContract}`,
+    schema: {
+      type: "string",
+      format: "date-time",
+      pattern: movementTimestampPattern,
+    },
   },
 };
 
@@ -899,6 +912,27 @@ for (const { path, parameters, schema } of collectionOperations) {
   };
 }
 
+const createDependencyUnavailableResponse = () => ({
+  description: "Required database dependency is unavailable",
+  content: {
+    "application/json": {
+      schema: { $ref: "#/components/schemas/V1Error" },
+      example: {
+        type: "inventory-error",
+        title: "Dependency unavailable",
+        status: 503,
+        code: "DEPENDENCY_UNAVAILABLE",
+        detail: "Inventory dependency is unavailable",
+        requestId: "request-id",
+        correlationId: "correlation-id",
+        retryable: true,
+        errors: [],
+      },
+    },
+  },
+  "x-error-codes": ["DEPENDENCY_UNAVAILABLE"],
+});
+
 const successSchemaByOperation = Object.freeze({
   "post /api/v1/auth/login": "V1AuthLoginResponse",
   "post /api/v1/auth/refresh": "V1AuthRefreshResponse",
@@ -938,6 +972,7 @@ for (const [path, pathItem] of Object.entries(swaggerSpec.paths)) {
   for (const [method, operation] of Object.entries(pathItem)) {
     if (!httpMethods.has(method)) continue;
     const successSchema = successSchemaByOperation[`${method} ${path}`];
+    operation.responses ||= {};
     for (const [status, response] of Object.entries(operation.responses || {})) {
       if (status.startsWith("2") && successSchema) {
         response.content = {
@@ -953,6 +988,7 @@ for (const [path, pathItem] of Object.entries(swaggerSpec.paths)) {
         };
       }
     }
+    operation.responses["503"] = createDependencyUnavailableResponse();
   }
 }
 

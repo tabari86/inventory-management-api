@@ -19,7 +19,7 @@ const OBJECT_ID_PATTERN = /^[a-fA-F0-9]{24}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 const ISO_TIMESTAMP_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/;
 const PRODUCT_SKU_MAX_LENGTH = Product.schema.path("sku").options.maxlength;
 const WAREHOUSE_CODE_MAX_LENGTH = Warehouse.schema.path("code").options.maxlength;
 
@@ -92,20 +92,85 @@ const normalizeBoundedExactFilter = (value, field, maxLength) => {
   return normalized;
 };
 
+const isGregorianLeapYear = (year) =>
+  year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+
 const normalizeTimestamp = (value, field) => {
   const trimmed = value.trim();
-  if (!ISO_TIMESTAMP_PATTERN.test(trimmed)) {
+  const match = ISO_TIMESTAMP_PATTERN.exec(trimmed);
+  if (!match) {
     throw validationFailure([
       fieldError(field, "Must be an ISO-8601 timestamp with a timezone"),
     ]);
   }
-  const date = new Date(trimmed);
-  if (Number.isNaN(date.getTime())) {
+
+  const [
+    ,
+    yearText,
+    monthText,
+    dayText,
+    hourText,
+    minuteText,
+    secondText,
+    fraction = "",
+    ,
+    offsetSign,
+    offsetHourText,
+    offsetMinuteText,
+  ] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const offsetHour = offsetHourText === undefined ? 0 : Number(offsetHourText);
+  const offsetMinute =
+    offsetMinuteText === undefined ? 0 : Number(offsetMinuteText);
+  const daysInMonth = [
+    31,
+    isGregorianLeapYear(year) ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
     throw validationFailure([
       fieldError(field, "Must be a valid ISO-8601 timestamp"),
     ]);
   }
-  return date.toISOString();
+
+  const localTime = new Date(0);
+  localTime.setUTCFullYear(year, month - 1, day);
+  localTime.setUTCHours(
+    hour,
+    minute,
+    second,
+    Number(fraction.padEnd(3, "0"))
+  );
+  const offsetDirection = offsetSign === "-" ? -1 : 1;
+  const offsetMilliseconds =
+    offsetDirection * (offsetHour * 60 + offsetMinute) * 60 * 1000;
+
+  return new Date(localTime.getTime() - offsetMilliseconds).toISOString();
 };
 
 const fingerprintQuery = ({ resource, sort, order, filters }) =>

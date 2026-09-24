@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const request = require("supertest");
 
 const app = require("../src/app");
+const DomainError = require("../src/errors/DomainError");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
 const StockMovement = require("../src/models/StockMovement");
@@ -277,6 +278,108 @@ describe("Cursor validation and query allowlists", () => {
     expect(() => parseCollectionQuery("products", query)).toThrow(
       expect.objectContaining({ code: "VALIDATION_FAILED" })
     );
+  });
+
+  it.each([
+    ["leap day", "2024-02-29T00:00:00Z", "2024-02-29T00:00:00.000Z"],
+    ["year end", "2026-12-31T23:59:59Z", "2026-12-31T23:59:59.000Z"],
+    ["one fractional digit", "2026-01-01T00:00:00.1Z", "2026-01-01T00:00:00.100Z"],
+    ["two fractional digits", "2026-01-01T00:00:00.12Z", "2026-01-01T00:00:00.120Z"],
+    ["three fractional digits", "2026-01-01T00:00:00.123Z", "2026-01-01T00:00:00.123Z"],
+    [
+      "equivalent numeric offset",
+      "2024-02-29T07:04:56.100-05:30",
+      "2024-02-29T12:34:56.100Z",
+    ],
+  ])("canonicalizes valid %s", (_caseName, timestamp, expected) => {
+    expect(
+      parseCollectionQuery("stock-movements", { from: timestamp }).filters.from
+    ).toBe(expected);
+  });
+
+  it.each([
+    ["month 13", "2026-13-01T00:00:00Z"],
+    ["month 00", "2026-00-01T00:00:00Z"],
+    ["day 00", "2026-01-00T00:00:00Z"],
+    ["2026 non-leap day", "2026-02-29T00:00:00Z"],
+    ["February 30", "2026-02-30T00:00:00Z"],
+    ["April 31", "2026-04-31T00:00:00Z"],
+    ["hour 24", "2026-01-01T24:00:00Z"],
+    ["hour 60", "2026-01-01T60:00:00Z"],
+    ["invalid minute", "2026-01-01T00:60:00Z"],
+    ["leap second", "2026-01-01T00:00:60Z"],
+    ["four fractional digits", "2026-01-01T00:00:00.1234Z"],
+    ["missing timezone", "2026-01-01T00:00:00"],
+    ["malformed numeric offset", "2026-01-01T00:00:00+0200"],
+    ["invalid offset hour", "2026-01-01T00:00:00+24:00"],
+    ["invalid offset minute", "2026-01-01T00:00:00+01:60"],
+  ])("rejects %s instead of normalizing it", (_caseName, timestamp) => {
+    let failure;
+    try {
+      parseCollectionQuery("stock-movements", { from: timestamp });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(DomainError);
+    expect(failure).toMatchObject({
+      code: "VALIDATION_FAILED",
+      httpStatus: 400,
+    });
+  });
+
+  it("canonicalizes instants before fingerprint and cursor comparison", () => {
+    const utc = parseCollectionQuery("stock-movements", {
+      from: "2024-02-29T12:34:56.1Z",
+      sort: "createdAt",
+      order: "asc",
+    });
+    const offset = parseCollectionQuery("stock-movements", {
+      from: "2024-02-29T14:34:56.100+02:00",
+      sort: "createdAt",
+      order: "asc",
+    });
+    const different = parseCollectionQuery("stock-movements", {
+      from: "2024-02-29T12:34:56.101Z",
+      sort: "createdAt",
+      order: "asc",
+    });
+
+    expect(utc.filters.from).toBe("2024-02-29T12:34:56.100Z");
+    expect(offset.filters).toEqual(utc.filters);
+    expect(offset.fingerprint).toBe(utc.fingerprint);
+    expect(different.fingerprint).not.toBe(utc.fingerprint);
+
+    const cursor = encodeCursor({
+      resource: "stock-movements",
+      order: utc.order,
+      fingerprint: utc.fingerprint,
+      item: boundary,
+    });
+    const continuation = parseCollectionQuery("stock-movements", {
+      from: "2024-02-29T14:34:56.100+02:00",
+      sort: "createdAt",
+      order: "asc",
+      cursor,
+    });
+    expect(continuation.boundary).toMatchObject({
+      createdAt: fixedCreatedAt,
+      id: boundary._id,
+    });
+    expect(() =>
+      parseCollectionQuery("stock-movements", {
+        from: "2024-02-29T12:34:56.101Z",
+        sort: "createdAt",
+        order: "asc",
+        cursor,
+      })
+    ).toThrow(expect.objectContaining({ code: "INVALID_CURSOR" }));
+    expect(() =>
+      parseCollectionQuery("stock-movements", {
+        from: "2024-02-29T12:34:56.101Z",
+        to: "2024-02-29T12:34:56.100Z",
+      })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_FAILED" }));
   });
 
   it("rejects filter changes and never reflects a raw cursor", async () => {

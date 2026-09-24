@@ -189,6 +189,65 @@ describe("Swagger/OpenAPI specification", () => {
     );
   });
 
+  it("documents the exact stock-movement timestamp filter contract", () => {
+    const timestampContract =
+      "Timezone is mandatory; fractional seconds, when present, must contain 1 to 3 digits; impossible calendar dates are rejected; accepted values are normalized to canonical UTC with millisecond precision.";
+    const timestampPattern =
+      "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})(?:\\.(\\d{1,3}))?(Z|([+-])(\\d{2}):(\\d{2}))$";
+
+    for (const [parameterName, bound] of [
+      ["MovementFromFilter", "lower"],
+      ["MovementToFilter", "upper"],
+    ]) {
+      expect(swaggerSpec.components.parameters[parameterName]).toMatchObject({
+        required: false,
+        description: `Inclusive createdAt ${bound} bound. ${timestampContract}`,
+        schema: {
+          type: "string",
+          format: "date-time",
+          pattern: timestampPattern,
+        },
+      });
+    }
+  });
+
+  it("documents retryable database dependency failures on every v1 operation", () => {
+    const documentedSpec = loadSwaggerSpec();
+    const databaseBackedOperations = documentedOperations(documentedSpec).filter(
+      ({ path }) => path.startsWith("/api/v1/")
+    );
+
+    expect(
+      ["/", "/health", "/health/live"].map(
+        (path) => documentedSpec.paths[path].get.responses["503"]
+      )
+    ).toEqual([undefined, undefined, undefined]);
+    expect(databaseBackedOperations.length).toBeGreaterThan(0);
+    for (const { operation } of databaseBackedOperations) {
+      const response = operation.responses["503"];
+      expect(response).toMatchObject({
+        description: "Required database dependency is unavailable",
+        content: {
+          "application/json": {
+            schema: { $ref: "#/components/schemas/V1Error" },
+          },
+        },
+        "x-error-codes": ["DEPENDENCY_UNAVAILABLE"],
+      });
+      expect(response.content["application/json"].example).toEqual({
+        type: "inventory-error",
+        title: "Dependency unavailable",
+        status: 503,
+        code: "DEPENDENCY_UNAVAILABLE",
+        detail: "Inventory dependency is unavailable",
+        requestId: expect.any(String),
+        correlationId: expect.any(String),
+        retryable: true,
+        errors: [],
+      });
+    }
+  });
+
   it("preserves existing validation and resource-ID 400 response contracts", () => {
     const specWithRefs = loadSwaggerSpec();
     const productCreate = specWithRefs.paths["/api/v1/products"].post.responses["400"];

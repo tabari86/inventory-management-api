@@ -46,7 +46,10 @@ const V1_ERROR_KEYS = [
   "type",
 ].sort();
 
-const expectV1Error = (response, { status, code, title, detail, field }) => {
+const expectV1Error = (
+  response,
+  { status, code, title, detail, field, retryable = false }
+) => {
   expect(response.statusCode).toBe(status);
   expect(response.headers["content-type"]).toMatch(/application\/json/);
   expect(Object.keys(response.body).sort()).toEqual(V1_ERROR_KEYS);
@@ -56,7 +59,7 @@ const expectV1Error = (response, { status, code, title, detail, field }) => {
     status,
     code,
     detail,
-    retryable: false,
+    retryable,
     requestId: expect.any(String),
     correlationId: expect.any(String),
     errors: expect.any(Array),
@@ -651,10 +654,11 @@ describe("Auth API", () => {
 
     expect(findByIdSpy).toHaveBeenCalledTimes(1);
     expectV1Error(response, {
-      status: 500,
-      code: "INTERNAL_ERROR",
-      title: "Internal server error",
-      detail: "An unexpected error occurred",
+      status: 503,
+      code: "DEPENDENCY_UNAVAILABLE",
+      title: "Dependency unavailable",
+      detail: "Inventory dependency is unavailable",
+      retryable: true,
     });
     expect(response.body.errors).toEqual([]);
     expect(JSON.stringify(response.body)).not.toContain(privateFailureMarker);
@@ -664,9 +668,9 @@ describe("Auth API", () => {
       expect.objectContaining({
         requestId: expect.any(String),
         correlationId: expect.any(String),
-        statusCode: 500,
-        errorCode: "INTERNAL_ERROR",
-        retryable: false,
+        statusCode: 503,
+        errorCode: "DEPENDENCY_UNAVAILABLE",
+        retryable: true,
         failureClass: "DATABASE",
       })
     );
