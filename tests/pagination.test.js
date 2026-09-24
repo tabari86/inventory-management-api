@@ -291,6 +291,26 @@ describe("Cursor validation and query allowlists", () => {
       "2024-02-29T07:04:56.100-05:30",
       "2024-02-29T12:34:56.100Z",
     ],
+    [
+      "positive offset previous-year rollover",
+      "2026-01-01T00:30:00+01:00",
+      "2025-12-31T23:30:00.000Z",
+    ],
+    [
+      "negative offset next-year rollover",
+      "2026-12-31T23:30:00-01:00",
+      "2027-01-01T00:30:00.000Z",
+    ],
+    [
+      "positive offset leap-day rollover",
+      "2024-03-01T00:30:00+01:00",
+      "2024-02-29T23:30:00.000Z",
+    ],
+    [
+      "maximum valid positive offset",
+      "2026-01-02T00:00:00+23:59",
+      "2026-01-01T00:01:00.000Z",
+    ],
   ])("canonicalizes valid %s", (_caseName, timestamp, expected) => {
     expect(
       parseCollectionQuery("stock-movements", { from: timestamp }).filters.from
