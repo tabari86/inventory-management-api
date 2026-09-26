@@ -46,7 +46,11 @@ describe("Inventory Core idempotency", () => {
 
   it("stores a hashed completed Product create response and replays it exactly", async () => {
     const token = await createManagerToken();
-    const payload = { sku: "IDEM-PRODUCT-001", name: "Idempotent product" };
+    const payload = {
+      sku: "IDEM-PRODUCT-001",
+      name: "Normal Product name",
+      description: "Seasonal inventory adjustment",
+    };
 
     const original = await request(app)
       .post("/api/products")
@@ -58,7 +62,11 @@ describe("Inventory Core idempotency", () => {
       .set("Authorization", `Bearer ${token}`)
       .set("Idempotency-Key", KEY)
       .set("X-Correlation-ID", "replay-correlation")
-      .send({ name: "Idempotent product", sku: "IDEM-PRODUCT-001" });
+      .send({
+        description: "Seasonal inventory adjustment",
+        name: "Normal Product name",
+        sku: "IDEM-PRODUCT-001",
+      });
 
     expect(original.status).toBe(201);
     expect(original.headers["idempotency-replayed"]).toBe("false");
@@ -89,6 +97,10 @@ describe("Inventory Core idempotency", () => {
     expect(records[0]).not.toHaveProperty("email");
     expect(records[0]).not.toHaveProperty("name");
     expect(records[0]).not.toHaveProperty("role");
+    expect(records[0].responseBody.data).toMatchObject({
+      name: payload.name,
+      description: payload.description,
+    });
     expect(records[0].expiresAt.getTime() - records[0].completedAt.getTime()).toBe(
       IdempotencyRecord.IDEMPOTENCY_RETENTION_MS
     );

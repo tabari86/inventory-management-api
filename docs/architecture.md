@@ -404,8 +404,11 @@ The unique scope is `(actorType, actorId, operationId, keyHash)`. The common
 mutation executor owns one transaction for keyed and unkeyed HTTP writes. For a
 keyed original it inserts an internal `processing` record, runs the
 session-bound domain operation and movement writes, persists Audit and Outbox
-records, constructs a plain JSON response snapshot, enforces the 1 MiB limit,
-and changes the record to `completed`. A failed transaction commits no record,
+records, constructs a plain JSON response snapshot, removes only the classified
+operational annotation keys `reference`, `reason`, `deactivationReason`, and
+`archiveReason`, enforces the 1 MiB limit, and changes the record to `completed`.
+Business `name` and `description` fields remain. The same minimized snapshot is
+used for the original result and replay. A failed transaction commits no record,
 and no committed `failed` state exists. Direct service use retains a fallback
 transaction, while route execution always supplies the executor-owned session,
 avoiding nested transactions.
@@ -454,14 +457,16 @@ stable operation ID, aggregate identity/version, outcome, request context,
 optional hashed idempotency reference, allowlisted before/after snapshots and
 bounded metadata. The exact Product snapshot keys are `id`, `sku`, `unit`,
 `status`, `version`, `deactivatedAt`, `deactivatedBy`,
-`deactivationReason`, `archivedAt`, `archivedBy`, and `archiveReason`. The exact
+`archivedAt`, and `archivedBy`. The exact
 Warehouse keys are `id`, `code`, `status`, `version`, `deactivatedAt`,
-`deactivatedBy`, and `deactivationReason`. The exact Stock keys are `id`,
+and `deactivatedBy`. The exact Stock keys are `id`,
 `productId`, `warehouseId`, `quantity`, `status`, `version`,
 `productLifecycleStatus`, and `warehouseLifecycleStatus`. Undefined keys are
 omitted and meaningful nulls remain. Product/Warehouse names and descriptions
 are deliberately excluded because they are free-form text; deterministic
-`changedFields` still records those updates. Mongoose internals and generic
+`changedFields` still records those updates. Lifecycle reasons remain on their
+owning primary records but are excluded from Audit snapshots, and movement
+references are excluded from Audit metadata. Mongoose internals and generic
 creation/update timestamps are excluded because they are not approved event
 contract fields. Snapshot and metadata limits are each 16,384 UTF-8 bytes.
 Snapshot hashes use `canonical-json-v1` and SHA-256. There is no failure-audit
@@ -474,6 +479,9 @@ limited to 65,536 UTF-8 bytes. Delivery begins as `pending` with zero attempts
 and `nextAttemptAt` equal to `occurredAt`. No polling, delivery, retry,
 dead-letter, webhook, or external publication worker exists yet. Pending rows
 therefore accumulate, and neither Audit nor Outbox has a TTL.
+Schema-required v1 `reference` and `archiveReason` payload keys remain present
+as `null`; caller annotation text is not propagated and event versions do not
+change.
 
 The version-1 registry contains exactly `catalog.product.created`,
 `catalog.product.updated`, `catalog.product.reactivated`,

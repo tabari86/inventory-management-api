@@ -44,6 +44,14 @@ token theft detection remain outside Phase 1.
   `{field,message}` details (128-character fields and 160-character messages)
   and never copies rejected values or raw Mongoose messages. Unknown validation
   shape is treated as an internal error instead of being downgraded to 400.
+- Validated structured identifiers may propagate, and Product/Warehouse names
+  and descriptions remain business content. Safe operational annotations remain
+  in their owning Product, Warehouse, or StockMovement record. Supported service
+  calls reject the narrow explicit credential-marker policy with
+  `VALIDATION_FAILED` and never echo the rejected value.
+- Audit and Outbox records minimize free text. Original, stored, and replayed
+  mutation results omit `reference`, `reason`, `deactivationReason`, and
+  `archiveReason` while preserving business `name` and `description` values.
 - Unexpected service failures retain the original exception only as native
   `cause`; public safe messages, HTTP details, structured logs, and validation
   details exclude that cause. Such failures are non-retryable unless a separate
@@ -56,7 +64,8 @@ token theft detection remain outside Phase 1.
   metadata.
 - Optional idempotency keys are hashed and scoped to actor plus stable operation
   ID. The original mutation, audit/outbox persistence, and completion record
-  share one transaction; replay does not repeat the domain write.
+  share one transaction; replay does not repeat the domain write. Raw keys are
+  neither persisted nor logged.
 - Inventory and lifecycle mutations use MongoDB transactions, guarded writes,
   explicit aggregate versions, referential checks, and derived Stock lifecycle
   guards. These are application consistency controls, not distributed-system

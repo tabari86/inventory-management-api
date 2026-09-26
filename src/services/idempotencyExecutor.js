@@ -12,9 +12,36 @@ const { assertApplicationContext } = require("../utils/applicationContext");
 const withTransaction = require("../utils/transaction");
 const { createDomainEventCollector } = require("./domainEventCollector");
 const { persistAuditOutboxEvents } = require("./auditOutboxService");
+const { operations } = require("./inventoryOperationRegistry");
 
 const MAX_ACQUISITION_ATTEMPTS = 3;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const PRODUCT_SINGLE_RESPONSE_OPERATIONS = new Set([
+  operations.PRODUCT_CREATE,
+  operations.PRODUCT_UPDATE,
+  operations.PRODUCT_DEACTIVATE,
+]);
+const PRODUCT_BULK_RESPONSE_OPERATIONS = new Set([
+  operations.PRODUCT_BULK_CREATE,
+  operations.PRODUCT_BULK_UPDATE,
+]);
+const WAREHOUSE_SINGLE_RESPONSE_OPERATIONS = new Set([
+  operations.WAREHOUSE_CREATE,
+  operations.WAREHOUSE_UPDATE,
+  operations.WAREHOUSE_DEACTIVATE,
+]);
+const WAREHOUSE_BULK_RESPONSE_OPERATIONS = new Set([
+  operations.WAREHOUSE_BULK_CREATE,
+  operations.WAREHOUSE_BULK_UPDATE,
+]);
+const INVENTORY_SINGLE_RESPONSE_OPERATIONS = new Set([
+  operations.GOODS_RECEIPT_SINGLE,
+  operations.GOODS_ISSUE_SINGLE,
+]);
+const INVENTORY_BULK_RESPONSE_OPERATIONS = new Set([
+  operations.GOODS_RECEIPT_BULK,
+  operations.GOODS_ISSUE_BULK,
+]);
 
 class IdempotencyAcquisitionConflict extends Error {
   constructor() {
@@ -62,6 +89,100 @@ const inProgressError = () =>
     message: "A request with this idempotency key is still being processed",
     retryable: true,
   });
+
+const omitOwnResponseFields = (value, fields) => {
+  if (!value || typeof value !== "object") return value;
+
+  const minimized =
+    typeof value.toJSON === "function" ? value.toJSON() : { ...value };
+  for (const field of fields) delete minimized[field];
+  return minimized;
+};
+
+const minimizeMutationResponse = (operationId, body) => {
+  if (!body || typeof body !== "object") return body;
+
+  if (PRODUCT_SINGLE_RESPONSE_OPERATIONS.has(operationId)) {
+    return {
+      ...body,
+      data: omitOwnResponseFields(body.data, [
+        "deactivationReason",
+        "archiveReason",
+      ]),
+    };
+  }
+
+  if (PRODUCT_BULK_RESPONSE_OPERATIONS.has(operationId)) {
+    if (!body.data || typeof body.data !== "object") return body;
+    return {
+      ...body,
+      data: {
+        ...body.data,
+        products: Array.isArray(body.data.products)
+          ? body.data.products.map((product) =>
+              omitOwnResponseFields(product, [
+                "deactivationReason",
+                "archiveReason",
+              ])
+            )
+          : body.data.products,
+      },
+    };
+  }
+
+  if (WAREHOUSE_SINGLE_RESPONSE_OPERATIONS.has(operationId)) {
+    return {
+      ...body,
+      data: omitOwnResponseFields(body.data, ["deactivationReason"]),
+    };
+  }
+
+  if (WAREHOUSE_BULK_RESPONSE_OPERATIONS.has(operationId)) {
+    if (!body.data || typeof body.data !== "object") return body;
+    return {
+      ...body,
+      data: {
+        ...body.data,
+        warehouses: Array.isArray(body.data.warehouses)
+          ? body.data.warehouses.map((warehouse) =>
+              omitOwnResponseFields(warehouse, ["deactivationReason"])
+            )
+          : body.data.warehouses,
+      },
+    };
+  }
+
+  if (INVENTORY_SINGLE_RESPONSE_OPERATIONS.has(operationId)) {
+    if (!body.data || typeof body.data !== "object") return body;
+    return {
+      ...body,
+      data: {
+        ...body.data,
+        stockMovement: omitOwnResponseFields(body.data.stockMovement, [
+          "reference",
+          "reason",
+        ]),
+      },
+    };
+  }
+
+  if (INVENTORY_BULK_RESPONSE_OPERATIONS.has(operationId)) {
+    if (!body.data || typeof body.data !== "object") return body;
+    return {
+      ...body,
+      data: {
+        ...body.data,
+        stockMovements: Array.isArray(body.data.stockMovements)
+          ? body.data.stockMovements.map((stockMovement) =>
+              omitOwnResponseFields(stockMovement, ["reference", "reason"])
+            )
+          : body.data.stockMovements,
+      },
+    };
+  }
+
+  return body;
+};
 
 const serializeResponse = (body, responseLimitBytes) => {
   let serialized;
@@ -209,7 +330,10 @@ const executeInventoryMutationCore = async ({
       session,
     });
 
-    const publicBody = buildResponse(result);
+    const publicBody = minimizeMutationResponse(
+      inventoryOperation.operationId,
+      buildResponse(result)
+    );
     const serializedResponse = serializeResponse(
       publicBody,
       keyed ? responseLimitBytes : Number.MAX_SAFE_INTEGER
@@ -328,5 +452,6 @@ module.exports = {
   MAX_ACQUISITION_ATTEMPTS,
   executeInventoryMutation,
   isScopeDuplicateError,
+  minimizeMutationResponse,
   serializeResponse,
 };

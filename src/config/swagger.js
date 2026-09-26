@@ -1089,7 +1089,7 @@ for (const { method, path, operationId } of mutationOperationRegistry) {
       { $ref: idempotencyReference },
     ];
   }
-  operation.description = `${operation.description || ""} Optional idempotency is evaluated after current authentication, authorization, and normalized validation. A contract-neutral successful result is stored atomically for seven days and presented through the requested HTTP contract on replay; conflicting payloads or an unresolved concurrent request return 409. Invalid idempotency headers return 400; invalid request or correlation IDs are replaced with safe effective values.`.trim();
+  operation.description = `${operation.description || ""} Optional idempotency is evaluated after current authentication, authorization, and normalized validation. A contract-neutral successful result is stored atomically for seven days and presented through the requested HTTP contract on replay; conflicting payloads or an unresolved concurrent request return 409. Invalid idempotency headers return 400; invalid request or correlation IDs are replaced with safe effective values. Supported caller-controlled business text and operational annotations must not contain explicit credential material. Successful mutation results, including idempotent replays, omit reference, reason, deactivationReason, and archiveReason; business name and description remain.`.trim();
   operation["x-idempotency-errors"] = {
     invalidHeaders: "400",
     conflictingPayload: "409",

@@ -2,6 +2,12 @@ const {
   findSecurityViolations,
   readTrackedFiles,
 } = require("../scripts/verifyRepositorySecurity");
+const inventoryService = require("../src/services/inventoryService");
+const productService = require("../src/services/productService");
+const warehouseService = require("../src/services/warehouseService");
+const {
+  containsExplicitCredentialMaterial,
+} = require("../src/utils/durableTextPolicy");
 
 const asFiles = (entries) =>
   new Map(
@@ -1089,5 +1095,157 @@ describe("Repository security verification", () => {
 
   it("passes against the current repository files", () => {
     expect(findSecurityViolations(readTrackedFiles())).toEqual([]);
+  });
+});
+
+describe("durable caller-text credential boundary", () => {
+  it.each([
+    "Bearer test-token",
+    "Authorization:",
+    "Authorization:test",
+    "Authorization = test",
+    "password=test",
+    "password =",
+    "password : test",
+    "apiKey=test",
+    "api_key = test",
+    "x-api-key: test",
+    "refreshToken=test",
+    "refresh_token = test",
+    "secret=test",
+    "bEaReR mixed-case-test-token",
+    "PaSsWoRd = mixed-case-test",
+  ])("recognizes the explicit marker in %s", (value) => {
+    expect(containsExplicitCredentialMaterial(value)).toBe(true);
+  });
+
+  it.each([
+    "PO-2026-0001",
+    "ASN/2026/0042",
+    "Cycle count correction",
+    "Supplier packaging delay",
+    "Seasonal inventory adjustment",
+    "Normal Product name",
+    "Normal Warehouse description",
+  ])("preserves the safe business value %s", (value) => {
+    expect(containsExplicitCredentialMaterial(value)).toBe(false);
+  });
+
+  it.each([
+    [
+      "Product name",
+      "name",
+      (value) =>
+        productService.createProduct({
+          sku: "BOUNDARY-PRODUCT-NAME",
+          name: value,
+        }),
+    ],
+    [
+      "Product description",
+      "description",
+      (value) =>
+        productService.createProduct({
+          sku: "BOUNDARY-PRODUCT-DESCRIPTION",
+          name: "Boundary product",
+          description: value,
+        }),
+    ],
+    [
+      "Product deactivation reason",
+      "deactivationReason",
+      (value) =>
+        productService.deactivateProduct({
+          productId: "64b64c6f2f0f000000000001",
+          expectedVersion: 1,
+          deactivationReason: value,
+        }),
+    ],
+    [
+      "Product archive reason",
+      "archiveReason",
+      (value) =>
+        productService.archiveProduct({
+          productId: "64b64c6f2f0f000000000001",
+          expectedVersion: 1,
+          archiveReason: value,
+        }),
+    ],
+    [
+      "Warehouse name",
+      "name",
+      (value) =>
+        warehouseService.createWarehouse({
+          code: "BOUNDARY-WAREHOUSE-NAME",
+          name: value,
+        }),
+    ],
+    [
+      "Warehouse description",
+      "description",
+      (value) =>
+        warehouseService.createWarehouse({
+          code: "BOUNDARY-WAREHOUSE-DESCRIPTION",
+          name: "Boundary warehouse",
+          description: value,
+        }),
+    ],
+    [
+      "Warehouse deactivation reason",
+      "deactivationReason",
+      (value) =>
+        warehouseService.deactivateWarehouse({
+          warehouseId: "64b64c6f2f0f000000000002",
+          expectedVersion: 1,
+          deactivationReason: value,
+        }),
+    ],
+    [
+      "Stock movement reference",
+      "reference",
+      (value) =>
+        inventoryService.createGoodsReceipt({
+          stockId: "64b64c6f2f0f000000000003",
+          quantity: 1,
+          reference: value,
+        }),
+    ],
+    [
+      "Stock movement reason",
+      "reason",
+      (value) =>
+        inventoryService.createGoodsReceipt({
+          stockId: "64b64c6f2f0f000000000003",
+          quantity: 1,
+          reason: value,
+        }),
+    ],
+  ])("rejects credential material in %s at the service boundary", async (
+    _label,
+    field,
+    invoke
+  ) => {
+    const marker = "secret=test-service-boundary";
+    let error;
+
+    try {
+      await invoke(marker);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      httpStatus: 400,
+      retryable: false,
+      errors: [{ field }],
+    });
+    expect(
+      JSON.stringify({
+        message: error.message,
+        safeMessage: error.safeMessage,
+        errors: error.errors,
+      })
+    ).not.toContain(marker);
   });
 });

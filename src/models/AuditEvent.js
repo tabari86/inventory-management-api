@@ -46,13 +46,11 @@ const EVENT_METADATA_FIELDS = Object.freeze({
     "stockMovementId",
     "movementType",
     "signedQuantityDelta",
-    "reference",
   ]),
   "inventory.stock.issued": Object.freeze([
     "stockMovementId",
     "movementType",
     "signedQuantityDelta",
-    "reference",
   ]),
 });
 
@@ -291,10 +289,7 @@ const validateAuditMetadata = ({ metadata, outcome, resourceType }) => {
       !Number.isInteger(metadata.signedQuantityDelta) ||
       (receipt
         ? metadata.signedQuantityDelta <= 0
-        : metadata.signedQuantityDelta >= 0) ||
-      (metadata.reference !== undefined &&
-        (typeof metadata.reference !== "string" ||
-          metadata.reference.length > 100))
+        : metadata.signedQuantityDelta >= 0)
     ) {
       throw new Error("Audit movement metadata is invalid");
     }

@@ -336,12 +336,14 @@ const cases = [
       return {
         context: { product: current },
         body: { expectedVersion: 1, deactivationReason: "  lifecycle  " },
-        verify: async () =>
-          expect(await Product.findById(current._id).lean()).toMatchObject({
+        verify: async (response) => {
+          expect(response.body.data).not.toHaveProperty("deactivationReason");
+          await expect(Product.findById(current._id).lean()).resolves.toMatchObject({
             status: "inactive",
             version: 2,
             deactivationReason: "lifecycle",
-          }),
+          });
+        },
       };
     },
   },
@@ -357,7 +359,10 @@ const cases = [
       return {
         context: { product: current },
         body: { expectedVersion: 1, archiveReason: "  retired  " },
-        verify: async () => {
+        verify: async (response) => {
+          expect(response.body).toEqual({
+            message: "Product deleted successfully",
+          });
           const archived = await Product.findById(current._id).lean();
           expect(archived.version).toBe(2);
           expect(archived.archiveReason).toBe("retired");
@@ -445,12 +450,14 @@ const cases = [
       return {
         context: { warehouse: current },
         body: { expectedVersion: 1, deactivationReason: "  lifecycle  " },
-        verify: async () =>
-          expect(await Warehouse.findById(current._id).lean()).toMatchObject({
+        verify: async (response) => {
+          expect(response.body.data).not.toHaveProperty("deactivationReason");
+          await expect(Warehouse.findById(current._id).lean()).resolves.toMatchObject({
             status: "inactive",
             version: 2,
             deactivationReason: "lifecycle",
-          }),
+          });
+        },
       };
     },
   },
@@ -730,6 +737,7 @@ describe("idempotency mutation coverage", () => {
       const committedEventCount = committedEventTypes.length;
       const idempotencyRecord = await IdempotencyRecord.findOne({ operationId })
         .lean();
+      expect(idempotencyRecord.responseBody).toEqual(original.body);
       const eventSet = await assertPersistedEventSet({
         expectedTypes: committedEventTypes,
         requestId: original.headers["x-request-id"],

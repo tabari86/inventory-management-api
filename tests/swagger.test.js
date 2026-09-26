@@ -934,6 +934,15 @@ describe("Swagger/OpenAPI specification", () => {
       );
       expect(operation.description).toContain("contract-neutral");
       expect(operation.description).toContain("return 409");
+      expect(operation.description).toContain(
+        "must not contain explicit credential material"
+      );
+      expect(operation.description).toContain(
+        "omit reference, reason, deactivationReason, and archiveReason"
+      );
+      expect(operation.description).toContain(
+        "business name and description remain"
+      );
       expect(operation.responses["400"]).toBeDefined();
       expect(operation.responses["409"]).toBeDefined();
       expect(

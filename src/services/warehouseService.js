@@ -5,6 +5,9 @@ const errorCodes = require("../errors/errorCodes");
 const normalizeServiceError = require("../errors/normalizeServiceError");
 const Stock = require("../models/Stock");
 const Warehouse = require("../models/Warehouse");
+const {
+  containsExplicitCredentialMaterial,
+} = require("../utils/durableTextPolicy");
 const withTransaction = require("../utils/transaction");
 const {
   buildStockSnapshot,
@@ -50,7 +53,15 @@ const assertCommandObject = (value, field, message) => {
 
 const assertRequiredText = (
   value,
-  { field, requiredMessage, max, maxMessage, patternMessage, pattern }
+  {
+    field,
+    requiredMessage,
+    max,
+    maxMessage,
+    patternMessage,
+    pattern,
+    credentialLabel,
+  }
 ) => {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw validationError(field, requiredMessage);
@@ -59,6 +70,15 @@ const assertRequiredText = (
   if (normalized.length > max) throw validationError(field, maxMessage);
   if (pattern && !pattern.test(normalized.toUpperCase())) {
     throw validationError(field, patternMessage);
+  }
+  if (
+    credentialLabel &&
+    containsExplicitCredentialMaterial(normalized)
+  ) {
+    throw validationError(
+      field,
+      `${credentialLabel} must not contain credential material`
+    );
   }
 };
 
@@ -71,6 +91,12 @@ const assertOptionalText = (value, { field, label, max }) => {
     throw validationError(
       field,
       `${label} must be at most ${max} characters long`
+    );
+  }
+  if (containsExplicitCredentialMaterial(value)) {
+    throw validationError(
+      field,
+      `${label} must not contain credential material`
     );
   }
 };
@@ -95,6 +121,7 @@ const assertWarehouseCreateCommand = (warehouse) => {
     requiredMessage: "Warehouse name is required",
     max: 120,
     maxMessage: "Warehouse name must be at most 120 characters long",
+    credentialLabel: "Warehouse name",
   });
   assertOptionalText(warehouse.description, {
     field: "description",
@@ -123,6 +150,7 @@ const assertWarehouseUpdateCommand = (update) => {
       requiredMessage: "Warehouse name cannot be empty",
       max: 120,
       maxMessage: "Warehouse name must be at most 120 characters long",
+      credentialLabel: "Warehouse name",
     });
   }
   assertOptionalText(update.description, {

@@ -5,6 +5,9 @@ const errorCodes = require("../errors/errorCodes");
 const normalizeServiceError = require("../errors/normalizeServiceError");
 const Product = require("../models/Product");
 const Stock = require("../models/Stock");
+const {
+  containsExplicitCredentialMaterial,
+} = require("../utils/durableTextPolicy");
 const withTransaction = require("../utils/transaction");
 const {
   buildProductSnapshot,
@@ -55,7 +58,7 @@ const assertCommandObject = (value, field, message) => {
 
 const assertRequiredText = (
   value,
-  { field, message, max, maxMessage, pattern }
+  { field, message, max, maxMessage, pattern, credentialLabel }
 ) => {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw validationError(field, message);
@@ -71,6 +74,15 @@ const assertRequiredText = (
       "SKU may only contain uppercase letters, numbers, dashes and underscores"
     );
   }
+  if (
+    credentialLabel &&
+    containsExplicitCredentialMaterial(normalized)
+  ) {
+    throw validationError(
+      field,
+      `${credentialLabel} must not contain credential material`
+    );
+  }
 };
 
 const assertOptionalText = (value, { field, max, label }) => {
@@ -82,6 +94,12 @@ const assertOptionalText = (value, { field, max, label }) => {
     throw validationError(
       field,
       `${label} must be at most ${max} characters long`
+    );
+  }
+  if (containsExplicitCredentialMaterial(value)) {
+    throw validationError(
+      field,
+      `${label} must not contain credential material`
     );
   }
 };
@@ -100,6 +118,7 @@ const assertProductCreateCommand = (product) => {
     message: "Product name is required",
     max: 120,
     maxMessage: "Product name must be at most 120 characters long",
+    credentialLabel: "Product name",
   });
   assertOptionalText(product.description, {
     field: "description",
@@ -137,6 +156,7 @@ const assertProductUpdateCommand = (update) => {
       message: "Product name cannot be empty",
       max: 120,
       maxMessage: "Product name must be at most 120 characters long",
+      credentialLabel: "Product name",
     });
   }
   assertOptionalText(update.description, {

@@ -105,8 +105,8 @@ describe("Canonical v1 mutation DTO presentation", () => {
     expect(deactivated.body.data).toMatchObject({
       status: "inactive",
       version: 3,
-      deactivationReason: "DTO test",
     });
+    expect(deactivated.body.data).not.toHaveProperty("deactivationReason");
 
     const archived = await authRequest(
       "delete",
@@ -185,8 +185,8 @@ describe("Canonical v1 mutation DTO presentation", () => {
     expect(deactivated.body.data).toMatchObject({
       status: "inactive",
       version: 3,
-      deactivationReason: "DTO test",
     });
+    expect(deactivated.body.data).not.toHaveProperty("deactivationReason");
   });
 
   it("presents bounded Stock single and bulk creation results", async () => {

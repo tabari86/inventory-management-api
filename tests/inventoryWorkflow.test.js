@@ -62,7 +62,14 @@ describe("Inventory Workflow API", () => {
     expect(response.body.data.stockMovement.stockId).toBe(stock._id.toString());
     expect(response.body.data.stockMovement.type).toBe("GOODS_RECEIPT");
     expect(response.body.data.stockMovement.quantity).toBe(10);
-    expect(response.body.data.stockMovement.reference).toBe("PO-TEST-001");
+    expect(response.body.data.stockMovement).not.toHaveProperty("reference");
+    expect(response.body.data.stockMovement).not.toHaveProperty("reason");
+    await expect(
+      StockMovement.findOne({ stockId: stock._id }).lean()
+    ).resolves.toMatchObject({
+      reference: "PO-TEST-001",
+      reason: "Automated goods receipt test",
+    });
   });
 
   it("should reject goods receipt without access token", async () => {
@@ -139,7 +146,14 @@ describe("Inventory Workflow API", () => {
     expect(response.body.data.stockMovement.stockId).toBe(stock._id.toString());
     expect(response.body.data.stockMovement.type).toBe("GOODS_ISSUE");
     expect(response.body.data.stockMovement.quantity).toBe(4);
-    expect(response.body.data.stockMovement.reference).toBe("SO-TEST-001");
+    expect(response.body.data.stockMovement).not.toHaveProperty("reference");
+    expect(response.body.data.stockMovement).not.toHaveProperty("reason");
+    await expect(
+      StockMovement.findOne({ stockId: stock._id, type: "GOODS_ISSUE" }).lean()
+    ).resolves.toMatchObject({
+      reference: "SO-TEST-001",
+      reason: "Automated goods issue test",
+    });
   });
 
   it("should reject goods issue when stock quantity is insufficient", async () => {
@@ -230,18 +244,38 @@ describe("Inventory Workflow API", () => {
           stockId: stock._id.toString(),
           quantity: 4,
           reference: "PO-BULK-001",
+          reason: "First bulk receipt",
         },
         {
           stockId: stock._id.toString(),
           quantity: 6,
           reference: "PO-BULK-002",
+          reason: "Second bulk receipt",
         },
       ]);
 
     expect(response.statusCode).toBe(201);
     expect(response.body.data.processedCount).toBe(2);
+    for (const movement of response.body.data.stockMovements) {
+      expect(movement).not.toHaveProperty("reference");
+      expect(movement).not.toHaveProperty("reason");
+    }
     expect((await Stock.findById(stock._id)).quantity).toBe(10);
     expect(await StockMovement.countDocuments({ type: "GOODS_RECEIPT" })).toBe(2);
+    await expect(
+      StockMovement.find({ type: "GOODS_RECEIPT" }).lean()
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reference: "PO-BULK-001",
+          reason: "First bulk receipt",
+        }),
+        expect.objectContaining({
+          reference: "PO-BULK-002",
+          reason: "Second bulk receipt",
+        }),
+      ])
+    );
   });
 
   it("bulk issues goods and accumulates quantities for the same stock", async () => {
@@ -258,18 +292,38 @@ describe("Inventory Workflow API", () => {
           stockId: stock._id.toString(),
           quantity: 3,
           reference: "SO-BULK-001",
+          reason: "First bulk issue",
         },
         {
           stockId: stock._id.toString(),
           quantity: 4,
           reference: "SO-BULK-002",
+          reason: "Second bulk issue",
         },
       ]);
 
     expect(response.statusCode).toBe(201);
     expect(response.body.data.processedCount).toBe(2);
+    for (const movement of response.body.data.stockMovements) {
+      expect(movement).not.toHaveProperty("reference");
+      expect(movement).not.toHaveProperty("reason");
+    }
     expect((await Stock.findById(stock._id)).quantity).toBe(5);
     expect(await StockMovement.countDocuments({ type: "GOODS_ISSUE" })).toBe(2);
+    await expect(
+      StockMovement.find({ type: "GOODS_ISSUE" }).lean()
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reference: "SO-BULK-001",
+          reason: "First bulk issue",
+        }),
+        expect.objectContaining({
+          reference: "SO-BULK-002",
+          reason: "Second bulk issue",
+        }),
+      ])
+    );
   });
 
   it("rejects a bulk goods issue when combined quantities are insufficient", async () => {

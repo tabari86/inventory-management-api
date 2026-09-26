@@ -2,6 +2,8 @@ const request = require("supertest");
 const { randomUUID } = require("crypto");
 
 const app = require("../src/app");
+const { createApp } = app;
+const { createLogger } = require("../src/config/logger");
 const DomainError = require("../src/errors/DomainError");
 const errorCodes = require("../src/errors/errorCodes");
 const AuditEvent = require("../src/models/AuditEvent");
@@ -28,6 +30,18 @@ const {
 const { getEventDefinition } = require("../src/services/domainEventRegistry");
 
 require("./setupTestDb");
+
+const createLogCapture = () => {
+  const output = [];
+  return {
+    output,
+    destination: {
+      write(chunk) {
+        output.push(String(chunk));
+      },
+    },
+  };
+};
 
 describe("transactional AuditEvent and OutboxEvent persistence", () => {
   beforeEach(async () => {
@@ -137,6 +151,361 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
     expect(outbox.delivery.nextAttemptAt).toEqual(outbox.occurredAt);
     expect(audit.after.snapshot).not.toHaveProperty("__v");
     expect(audit.after.snapshot).not.toHaveProperty("createdAt");
+  });
+
+  it("rejects credential material before a keyed inventory mutation can persist or log it", async () => {
+    const marker = "Bearer test-token-do-not-store";
+    const key = "durable-secret-test-1";
+    const token = await createManagerToken();
+    const product = await Product.create({
+      sku: "DURABLE-BOUNDARY-P1",
+      name: "Durable boundary product",
+    });
+    const warehouse = await Warehouse.create({
+      code: "DURABLE-BOUNDARY-W1",
+      name: "Durable boundary warehouse",
+    });
+    const stock = await Stock.create({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: 0,
+    });
+    const { output, destination } = createLogCapture();
+    const logger = createLogger({
+      destination,
+      environment: "production",
+      level: "info",
+    });
+
+    const response = await request(createApp({ logger }))
+      .post("/api/v1/goods-receipts")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .set("X-Request-ID", "durable-boundary-request-1")
+      .set("X-Correlation-ID", "durable-boundary-correlation-1")
+      .send({
+        stockId: stock._id,
+        quantity: 3,
+        reference: marker,
+        reason: "Supplier packaging delay",
+      });
+    logger.flush();
+
+    const persisted = {
+      stock: await Stock.findById(stock._id).lean(),
+      movements: await StockMovement.find({}).lean(),
+      audits: await AuditEvent.find({}).lean(),
+      outboxes: await OutboxEvent.find({}).lean(),
+      idempotency: await IdempotencyRecord.find({}).lean(),
+    };
+    const responseJson = JSON.stringify(response.body);
+    const logOutput = output.join("");
+
+    expect({
+      status: response.status,
+      code: response.body.code,
+      retryable: response.body.retryable,
+      requestId: response.body.requestId,
+      correlationId: response.body.correlationId,
+      errorField: response.body.errors?.[0]?.field,
+      stockQuantity: persisted.stock.quantity,
+      movements: persisted.movements.length,
+      audits: persisted.audits.length,
+      outboxes: persisted.outboxes.length,
+      idempotencyRecords: persisted.idempotency.length,
+      processingRecords: persisted.idempotency.filter(
+        ({ state }) => state === "processing"
+      ).length,
+      completedRecords: persisted.idempotency.filter(
+        ({ state }) => state === "completed"
+      ).length,
+      markerInStock: JSON.stringify(persisted.stock).includes(marker),
+      markerInStockMovement: JSON.stringify(persisted.movements).includes(marker),
+      markerInAudit: JSON.stringify(persisted.audits).includes(marker),
+      markerInOutbox: JSON.stringify(persisted.outboxes).includes(marker),
+      markerInIdempotency: JSON.stringify(persisted.idempotency).includes(marker),
+      markerInResponse: responseJson.includes(marker),
+      markerInLogs: logOutput.includes(marker),
+    }).toEqual({
+      status: 400,
+      code: "VALIDATION_FAILED",
+      retryable: false,
+      requestId: "durable-boundary-request-1",
+      correlationId: "durable-boundary-correlation-1",
+      errorField: "reference",
+      stockQuantity: 0,
+      movements: 0,
+      audits: 0,
+      outboxes: 0,
+      idempotencyRecords: 0,
+      processingRecords: 0,
+      completedRecords: 0,
+      markerInStock: false,
+      markerInStockMovement: false,
+      markerInAudit: false,
+      markerInOutbox: false,
+      markerInIdempotency: false,
+      markerInResponse: false,
+      markerInLogs: false,
+    });
+
+    const safePayload = {
+      stockId: stock._id,
+      quantity: 3,
+      reference: "PO-2026-0001",
+      reason: "Supplier packaging delay",
+    };
+    const safeResponse = await request(createApp({ logger }))
+      .post("/api/goods-receipts")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(safePayload);
+    const replay = await request(createApp({ logger }))
+      .post("/api/goods-receipts")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", key)
+      .send(safePayload);
+    logger.flush();
+
+    expect(safeResponse.status).toBe(201);
+    expect(safeResponse.headers["idempotency-replayed"]).toBe("false");
+    expect(replay.status).toBe(201);
+    expect(replay.headers["idempotency-replayed"]).toBe("true");
+    expect(replay.body).toEqual(safeResponse.body);
+
+    const movement = await StockMovement.findOne({}).lean();
+    const audit = await AuditEvent.findOne({}).lean();
+    const outbox = await OutboxEvent.findOne({}).lean();
+    const idempotency = await IdempotencyRecord.findOne({}).lean();
+    expect(movement).toMatchObject({
+      reference: safePayload.reference,
+      reason: safePayload.reason,
+    });
+    expect(audit.metadata).not.toHaveProperty("reference");
+    expect(outbox.payload.reference).toBeNull();
+    expect(idempotency.state).toBe("completed");
+    expect(idempotency.responseBody).toEqual(safeResponse.body);
+    expect(idempotency.responseBody.data.stockMovement).not.toHaveProperty(
+      "reference"
+    );
+    expect(idempotency.responseBody.data.stockMovement).not.toHaveProperty(
+      "reason"
+    );
+    expect(safeResponse.body.data.stockMovement).not.toHaveProperty(
+      "reference"
+    );
+    expect(safeResponse.body.data.stockMovement).not.toHaveProperty("reason");
+    expect(safeResponse.body.data.stockMovement.productSnapshot.name).toBe(
+      product.name
+    );
+    expect(safeResponse.body.data.stockMovement.warehouseSnapshot.name).toBe(
+      warehouse.name
+    );
+    for (const value of [safePayload.reference, safePayload.reason]) {
+      expect(JSON.stringify(audit)).not.toContain(value);
+      expect(JSON.stringify(outbox)).not.toContain(value);
+      expect(JSON.stringify(idempotency.responseBody)).not.toContain(value);
+      expect(JSON.stringify(safeResponse.body)).not.toContain(value);
+    }
+    expect(await StockMovement.countDocuments()).toBe(1);
+    expect(await AuditEvent.countDocuments()).toBe(1);
+    expect(await OutboxEvent.countDocuments()).toBe(1);
+    expect(await IdempotencyRecord.countDocuments({ state: "processing" })).toBe(
+      0
+    );
+    expect(await IdempotencyRecord.countDocuments({ state: "completed" })).toBe(
+      1
+    );
+  });
+
+  it("rejects credential material before a keyed lifecycle mutation can persist or log it", async () => {
+    const marker = "apiKey=test-lifecycle-value";
+    const token = await createManagerToken();
+    const product = await Product.create({
+      sku: "DURABLE-LIFECYCLE-P1",
+      name: "Durable lifecycle product",
+    });
+    const { output, destination } = createLogCapture();
+    const logger = createLogger({
+      destination,
+      environment: "production",
+      level: "info",
+    });
+
+    const response = await request(createApp({ logger }))
+      .patch(`/api/v1/products/${product._id}/deactivate`)
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "durable-lifecycle-test-1")
+      .send({
+        expectedVersion: product.version,
+        deactivationReason: marker,
+      });
+    logger.flush();
+
+    const persisted = {
+      product: await Product.findById(product._id).lean(),
+      audits: await AuditEvent.find({}).lean(),
+      outboxes: await OutboxEvent.find({}).lean(),
+      idempotency: await IdempotencyRecord.find({}).lean(),
+    };
+
+    expect({
+      status: response.status,
+      code: response.body.code,
+      productStatus: persisted.product.status,
+      productVersion: persisted.product.version,
+      audits: persisted.audits.length,
+      outboxes: persisted.outboxes.length,
+      idempotencyRecords: persisted.idempotency.length,
+      markerInProduct: JSON.stringify(persisted.product).includes(marker),
+      markerInAudit: JSON.stringify(persisted.audits).includes(marker),
+      markerInOutbox: JSON.stringify(persisted.outboxes).includes(marker),
+      markerInIdempotency: JSON.stringify(persisted.idempotency).includes(marker),
+      markerInResponse: JSON.stringify(response.body).includes(marker),
+      markerInLogs: output.join("").includes(marker),
+    }).toEqual({
+      status: 400,
+      code: "VALIDATION_FAILED",
+      productStatus: "active",
+      productVersion: 1,
+      audits: 0,
+      outboxes: 0,
+      idempotencyRecords: 0,
+      markerInProduct: false,
+      markerInAudit: false,
+      markerInOutbox: false,
+      markerInIdempotency: false,
+      markerInResponse: false,
+      markerInLogs: false,
+    });
+  });
+
+  it("rejects credential material in movement reason before any keyed write", async () => {
+    const marker = "secret=test-reason";
+    const token = await createManagerToken();
+    const product = await Product.create({
+      sku: "DURABLE-REASON-P1",
+      name: "Durable reason product",
+    });
+    const warehouse = await Warehouse.create({
+      code: "DURABLE-REASON-W1",
+      name: "Durable reason warehouse",
+    });
+    const stock = await Stock.create({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: 0,
+    });
+    const { output, destination } = createLogCapture();
+    const logger = createLogger({
+      destination,
+      environment: "production",
+      level: "info",
+    });
+
+    const response = await request(createApp({ logger }))
+      .post("/api/v1/goods-receipts")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "durable-reason-test-1")
+      .send({
+        stockId: stock._id,
+        quantity: 2,
+        reference: "PO-REASON-1",
+        reason: marker,
+      });
+    logger.flush();
+
+    const persisted = {
+      stock: await Stock.findById(stock._id).lean(),
+      movements: await StockMovement.find({}).lean(),
+      audits: await AuditEvent.find({}).lean(),
+      outboxes: await OutboxEvent.find({}).lean(),
+      idempotency: await IdempotencyRecord.find({}).lean(),
+    };
+
+    expect({
+      status: response.status,
+      code: response.body.code,
+      stockQuantity: persisted.stock.quantity,
+      movements: persisted.movements.length,
+      audits: persisted.audits.length,
+      outboxes: persisted.outboxes.length,
+      idempotencyRecords: persisted.idempotency.length,
+      markerInStockMovement: JSON.stringify(persisted.movements).includes(marker),
+      markerInAudit: JSON.stringify(persisted.audits).includes(marker),
+      markerInOutbox: JSON.stringify(persisted.outboxes).includes(marker),
+      markerInIdempotency: JSON.stringify(persisted.idempotency).includes(marker),
+      markerInResponse: JSON.stringify(response.body).includes(marker),
+      markerInLogs: output.join("").includes(marker),
+    }).toEqual({
+      status: 400,
+      code: "VALIDATION_FAILED",
+      stockQuantity: 0,
+      movements: 0,
+      audits: 0,
+      outboxes: 0,
+      idempotencyRecords: 0,
+      markerInStockMovement: false,
+      markerInAudit: false,
+      markerInOutbox: false,
+      markerInIdempotency: false,
+      markerInResponse: false,
+      markerInLogs: false,
+    });
+  });
+
+  it("rejects a safe-unsafe-safe bulk mutation atomically", async () => {
+    const marker = "password=hunter2-test";
+    const token = await createManagerToken();
+    const product = await Product.create({
+      sku: "DURABLE-BULK-P1",
+      name: "Durable bulk product",
+    });
+    const warehouse = await Warehouse.create({
+      code: "DURABLE-BULK-W1",
+      name: "Durable bulk warehouse",
+    });
+    const stock = await Stock.create({
+      productId: product._id,
+      warehouseId: warehouse._id,
+      quantity: 0,
+    });
+
+    const response = await request(app)
+      .post("/api/v1/goods-receipts/bulk")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "durable-bulk-test-1")
+      .send([
+        {
+          stockId: stock._id,
+          quantity: 1,
+          reference: "PO-BULK-SAFE-1",
+        },
+        { stockId: stock._id, quantity: 2, reason: marker },
+        {
+          stockId: stock._id,
+          quantity: 3,
+          reference: "PO-BULK-SAFE-3",
+        },
+      ]);
+
+    expect(response).toMatchObject({
+      status: 400,
+      body: {
+        code: "VALIDATION_FAILED",
+        retryable: false,
+        errors: [expect.objectContaining({ field: "reason" })],
+      },
+    });
+    expect(JSON.stringify(response.body)).not.toContain(marker);
+    await expect(Stock.findById(stock._id).lean()).resolves.toMatchObject({
+      quantity: 0,
+      version: 1,
+    });
+    expect(await StockMovement.countDocuments()).toBe(0);
+    expect(await AuditEvent.countDocuments()).toBe(0);
+    expect(await OutboxEvent.countDocuments()).toBe(0);
+    expect(await IdempotencyRecord.countDocuments()).toBe(0);
   });
 
   it("creates Audit only for no-change and keyed replay creates nothing new", async () => {
@@ -573,10 +942,10 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
     expect(await OutboxEvent.countDocuments()).toBe(0);
   });
 
-  it("persists no credentials, actor PII, raw commands, or free-form names", async () => {
+  it("persists no actor PII, raw commands, raw keys, or business text in events", async () => {
     const token = await createManagerToken();
-    const fakeValue =
-      "password=FAKE accessToken=FAKE refreshToken=FAKE secret=FAKE";
+    const businessName = "Secure event product";
+    const businessDescription = "Routine catalog description";
     const rawKey = "raw.key.must.not.persist.0001";
     const response = await request(app)
       .post("/api/products")
@@ -584,8 +953,8 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
       .set("Idempotency-Key", rawKey)
       .send({
         sku: "SECURE-EVENT-1",
-        name: fakeValue,
-        description: fakeValue,
+        name: businessName,
+        description: businessDescription,
       });
     expect(response.status).toBe(201);
 
@@ -628,7 +997,8 @@ describe("transactional AuditEvent and OutboxEvent persistence", () => {
     documents.forEach(inspect);
     const serialized = JSON.stringify(documents);
     for (const forbiddenValue of [
-      fakeValue,
+      businessName,
+      businessDescription,
       rawKey,
       token,
       actor.name,

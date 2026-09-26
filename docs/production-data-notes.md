@@ -202,8 +202,10 @@ stable dataset but are not snapshot-isolated across concurrent writes; only
 `createdAt` sorting is supported, and arbitrary search/projection is rejected.
 Canonical v1 inventory mutation data is also presented through explicit public
 DTO allowlists after fresh execution or replay, so Mongoose `__v` and other
-persistence-only fields are excluded without changing legacy response bodies or
-stored idempotency records.
+persistence-only fields are excluded. Independently, current mutation execution
+uses the same minimized result for initial and replay responses under both HTTP
+contracts: operational annotations are omitted while business names and
+descriptions remain.
 
 Production startup disables automatic Mongoose index construction. Required
 read indexes are owned by a dry-run-first migration:
@@ -382,6 +384,39 @@ archive callers must replace `{ "ids": [...] }` with ordered
 idempotency key that was previously bound to an IDs-only bulk-archive body.
 Creates remain unchanged. This rollout introduces no API v2 and no Warehouse
 archive operation.
+
+## Durable-data boundary rollout
+
+The caller-text boundary requires no schema, index, collection, migration, or
+backfill. It applies to new writes made through supported Product, Warehouse,
+and inventory mutation services. Explicit credential-marker content is rejected
+before commit. Safe operational annotations remain in their owning primary
+Product, Warehouse, or StockMovement record, while Audit, Outbox, and
+idempotent mutation snapshots minimize their propagation.
+
+**Gate 4 release prerequisite.** Before enabling the A-04-hardened application
+against an existing database, operators must inspect existing caller-controlled
+free-text fields for the same explicit credential-marker patterns enforced on
+new service writes. The review covers Product `name`, `description`,
+`deactivationReason`, and `archiveReason`; Warehouse `name`, `description`, and
+`deactivationReason`; StockMovement `reference` and `reason`; and any historical
+free-text copies already stored in AuditEvent, OutboxEvent, or IdempotencyRecord
+documents.
+
+Request-time service validation is not sufficient for pre-existing data. Later
+supported mutations can reuse stored Product or Warehouse text without receiving
+it again as caller input; for example, existing names can be copied into new
+StockMovement snapshots and mutation/idempotency responses.
+
+Any candidate blocks production rollout until it is investigated and any
+remediation is separately reviewed and approved. This release step does not
+automatically delete, rewrite, redact, scrub, or repair historical data, adds no
+mass-cleanup migration, and adds no runtime full-data rescan. Operational
+evidence must report only safe identifiers and counts—prefer collection,
+document ID, field path, and candidate count—and must not print raw candidate
+content. Future Agent, n8n, or worker consumers must treat Outbox as the
+minimized structured boundary and must not reconstruct or fan out primary
+free-text annotations.
 
 ## Operational runtime deployment
 

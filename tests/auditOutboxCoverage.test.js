@@ -4,6 +4,7 @@ const request = require("supertest");
 
 const app = require("../src/app");
 const AuditEvent = require("../src/models/AuditEvent");
+const IdempotencyRecord = require("../src/models/IdempotencyRecord");
 const OutboxEvent = require("../src/models/OutboxEvent");
 const Product = require("../src/models/Product");
 const Stock = require("../src/models/Stock");
@@ -162,10 +163,25 @@ describe("Audit/outbox mutation coverage", () => {
     const response = await request(app)
       .patch(`/api/products/${product._id}/deactivate`)
       .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "coverage.product.deactivate")
       .send({ deactivationReason: "planned", expectedVersion: product.version });
 
     expect(response.status).toBe(200);
     const events = await OutboxEvent.find({}).sort({ createdAt: 1 }).lean();
+    const persisted = await Product.findById(product._id).lean();
+    const productAudit = await AuditEvent.findOne({
+      "resource.type": "Product",
+    }).lean();
+    expect(persisted.deactivationReason).toBe("planned");
+    expect(response.body.data).not.toHaveProperty("deactivationReason");
+    expect(productAudit.after.snapshot).not.toHaveProperty(
+      "deactivationReason"
+    );
+    const productRecord = await IdempotencyRecord.findOne({}).lean();
+    expect(productRecord.responseBody.data).not.toHaveProperty(
+      "deactivationReason"
+    );
+    expect(JSON.stringify(events)).not.toContain("planned");
     expect(events.map(({ eventType }) => eventType)).toEqual([
       "catalog.product.deactivated",
       "inventory.stock.availability-guard-changed",
@@ -197,10 +213,25 @@ describe("Audit/outbox mutation coverage", () => {
     const response = await request(app)
       .patch(`/api/warehouses/${warehouse._id}/deactivate`)
       .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "coverage.warehouse.deactivate")
       .send({ deactivationReason: "planned", expectedVersion: warehouse.version });
 
     expect(response.status).toBe(200);
     const events = await OutboxEvent.find({}).sort({ _id: 1 }).lean();
+    const persisted = await Warehouse.findById(warehouse._id).lean();
+    const warehouseAudit = await AuditEvent.findOne({
+      "resource.type": "Warehouse",
+    }).lean();
+    expect(persisted.deactivationReason).toBe("planned");
+    expect(response.body.data).not.toHaveProperty("deactivationReason");
+    expect(warehouseAudit.after.snapshot).not.toHaveProperty(
+      "deactivationReason"
+    );
+    const warehouseRecord = await IdempotencyRecord.findOne({}).lean();
+    expect(warehouseRecord.responseBody.data).not.toHaveProperty(
+      "deactivationReason"
+    );
+    expect(JSON.stringify(events)).not.toContain("planned");
     expect(events.map(({ eventType }) => eventType)).toEqual([
       "warehouse.deactivated",
       "inventory.stock.availability-guard-changed",
@@ -247,6 +278,7 @@ describe("Audit/outbox mutation coverage", () => {
     const response = await request(app)
       .delete(`/api/products/${product._id}`)
       .set("Authorization", `Bearer ${token}`)
+      .set("Idempotency-Key", "coverage.product.archive")
       .send({ archiveReason: "retired", expectedVersion: product.version });
 
     expect(response.status).toBe(200);
@@ -261,9 +293,14 @@ describe("Audit/outbox mutation coverage", () => {
       after: expect.any(Object),
     });
     expect(audit.after.snapshot.archivedAt).toEqual(expect.any(String));
+    expect(audit.after.snapshot).not.toHaveProperty("archiveReason");
+    const archiveRecord = await IdempotencyRecord.findOne({}).lean();
+    expect(JSON.stringify(archiveRecord.responseBody)).not.toContain("retired");
+    expect(archiveRecord.responseBody).not.toHaveProperty("archiveReason");
     expect(outboxes[0]).toMatchObject({
       eventType: "catalog.product.archived",
       aggregate: { id: product._id.toString(), version: 2 },
+      payload: { archiveReason: null },
     });
     expect(outboxes[1]).toMatchObject({
       eventType: "inventory.stock.availability-guard-changed",
@@ -309,10 +346,8 @@ describe("Audit/outbox mutation coverage", () => {
     );
     expect(outboxes.map(({ payload }) => payload.beforeQuantity)).toEqual([0, 2]);
     expect(outboxes.map(({ payload }) => payload.afterQuantity)).toEqual([2, 5]);
-    expect(outboxes.map(({ payload }) => payload.reference)).toEqual([
-      "PO-A",
-      "PO-B",
-    ]);
+    expect(movements.map(({ reference }) => reference)).toEqual(["PO-A", "PO-B"]);
+    expect(outboxes.map(({ payload }) => payload.reference)).toEqual([null, null]);
     expect(outboxes.map(({ payload }) => payload.reasonCode)).toEqual([
       "GOODS_RECEIPT",
       "GOODS_RECEIPT",
@@ -323,7 +358,11 @@ describe("Audit/outbox mutation coverage", () => {
       quantity: 5,
       version: 3,
     });
-    expect(await AuditEvent.countDocuments()).toBe(2);
+    const audits = await AuditEvent.find({}).lean();
+    expect(audits).toHaveLength(2);
+    expect(audits.every(({ metadata }) => metadata.reference === undefined)).toBe(
+      true
+    );
   });
 
   it("repeated bulk issues preserve exact movement order and sequential versions", async () => {
@@ -362,15 +401,17 @@ describe("Audit/outbox mutation coverage", () => {
     expect(outboxes.map(({ payload }) => payload.signedDelta)).toEqual([-2, -3]);
     expect(outboxes.map(({ payload }) => payload.beforeQuantity)).toEqual([10, 8]);
     expect(outboxes.map(({ payload }) => payload.afterQuantity)).toEqual([8, 5]);
-    expect(outboxes.map(({ payload }) => payload.reference)).toEqual([
-      "SO-A",
-      "SO-B",
-    ]);
+    expect(movements.map(({ reference }) => reference)).toEqual(["SO-A", "SO-B"]);
+    expect(outboxes.map(({ payload }) => payload.reference)).toEqual([null, null]);
     expect(await Stock.findById(stock._id).lean()).toMatchObject({
       quantity: 5,
       version: 3,
     });
-    expect(await AuditEvent.countDocuments()).toBe(2);
+    const audits = await AuditEvent.find({}).lean();
+    expect(audits).toHaveLength(2);
+    expect(audits.every(({ metadata }) => metadata.reference === undefined)).toBe(
+      true
+    );
   });
 
   it("enforces event-pair identity for every changed transition", async () => {

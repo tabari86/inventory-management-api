@@ -101,12 +101,47 @@ describe("AuditEvent model", () => {
       ).validate()
     ).resolves.toBeUndefined();
 
-    const unsafeSnapshot = buildSnapshotEnvelope({
-      ...productSnapshot,
-      password: "must-not-persist",
+    for (const field of [
+      "password",
+      "deactivationReason",
+      "archiveReason",
+    ]) {
+      const unsafeSnapshot = buildSnapshotEnvelope({
+        ...productSnapshot,
+        [field]: "must-not-persist",
+      });
+      await expect(
+        new AuditEvent(buildRecord({ after: unsafeSnapshot })).validate()
+      ).rejects.toThrow("outside its allowlist");
+    }
+
+    const warehouseMetadata = { eventType: "warehouse.created" };
+    const warehouseSnapshot = buildSnapshotEnvelope({
+      id: "64b64c6f2f0f000000000002",
+      code: "AUDIT-W1",
+      status: "active",
+      version: 1,
+      deactivationReason: "must-not-persist",
     });
     await expect(
-      new AuditEvent(buildRecord({ after: unsafeSnapshot })).validate()
+      new AuditEvent(
+        buildRecord({
+          action: "warehouse.create.v1",
+          resource: {
+            type: "Warehouse",
+            id: "64b64c6f2f0f000000000002",
+            aggregateVersion: 1,
+          },
+          after: warehouseSnapshot,
+          metadata: warehouseMetadata,
+          metadataSizeBytes: Buffer.byteLength(
+            require("../src/utils/canonicalJson").canonicalize(
+              warehouseMetadata
+            ),
+            "utf8"
+          ),
+        })
+      ).validate()
     ).rejects.toThrow("outside its allowlist");
 
     const unsafeMetadata = {
@@ -119,6 +154,44 @@ describe("AuditEvent model", () => {
           metadata: unsafeMetadata,
           metadataSizeBytes: Buffer.byteLength(
             require("../src/utils/canonicalJson").canonicalize(unsafeMetadata),
+            "utf8"
+          ),
+        })
+      ).validate()
+    ).rejects.toThrow("unsupported fields");
+
+    const movementMetadata = {
+      eventType: "inventory.stock.received",
+      stockMovementId: "64b64c6f2f0f000000000004",
+      movementType: "GOODS_RECEIPT",
+      signedQuantityDelta: 2,
+      reference: "PO-2026-0001",
+    };
+    await expect(
+      new AuditEvent(
+        buildRecord({
+          action: "inventory.goods-receipt.single.v1",
+          resource: {
+            type: "Stock",
+            id: "64b64c6f2f0f000000000003",
+            aggregateVersion: 2,
+          },
+          after: buildSnapshotEnvelope({
+            id: "64b64c6f2f0f000000000003",
+            productId: productSnapshot.id,
+            warehouseId: "64b64c6f2f0f000000000002",
+            quantity: 2,
+            status: "active",
+            version: 2,
+            productLifecycleStatus: "active",
+            warehouseLifecycleStatus: "active",
+          }),
+          reasonCode: "GOODS_RECEIPT",
+          metadata: movementMetadata,
+          metadataSizeBytes: Buffer.byteLength(
+            require("../src/utils/canonicalJson").canonicalize(
+              movementMetadata
+            ),
             "utf8"
           ),
         })

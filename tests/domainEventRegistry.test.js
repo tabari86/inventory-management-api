@@ -50,6 +50,40 @@ describe("domain event registry", () => {
     }
   });
 
+  it("preserves v1 required annotation keys while allowing minimized null values", () => {
+    const stockId = "64b64c6f2f0f000000000001";
+    const received = getEventDefinition("inventory.stock.received");
+    const archived = getEventDefinition("catalog.product.archived");
+
+    expect(
+      received.payloadBuilder({
+        stockId,
+        productId: "64b64c6f2f0f000000000002",
+        warehouseId: "64b64c6f2f0f000000000003",
+        stockMovementId: "64b64c6f2f0f000000000004",
+        signedDelta: 2,
+        beforeQuantity: 1,
+        afterQuantity: 3,
+        reference: null,
+        reasonCode: "GOODS_RECEIPT",
+        aggregateVersion: 2,
+      })
+    ).toMatchObject({ reference: null });
+    expect(
+      archived.payloadBuilder({
+        productId: stockId,
+        sku: "P-1",
+        status: "inactive",
+        archiveReason: null,
+        aggregateVersion: 2,
+      })
+    ).toMatchObject({ archiveReason: null });
+    for (const definition of [received, archived]) {
+      expect(definition.eventVersion).toBe(1);
+      expect(definition.payloadSchemaVersion).toBe(1);
+    }
+  });
+
   it("rejects unknown types, missing fields, extra fields, and wrong signed deltas", () => {
     expect(() => getEventDefinition("inventory.stock.received.v1")).toThrow(
       expect.objectContaining({ code: "EVENT_DESCRIPTOR_INVALID" })

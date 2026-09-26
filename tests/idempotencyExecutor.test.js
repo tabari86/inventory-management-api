@@ -11,8 +11,12 @@ const StockMovement = require("../src/models/StockMovement");
 const Warehouse = require("../src/models/Warehouse");
 const {
   executeInventoryMutation,
+  minimizeMutationResponse,
   serializeResponse,
 } = require("../src/services/idempotencyExecutor");
+const {
+  operations,
+} = require("../src/services/inventoryOperationRegistry");
 const { buildCanonicalCommand, hashCanonicalCommand } = require("../src/utils/canonicalJson");
 const { hashIdempotencyKey } = require("../src/utils/idempotencyHash");
 const { buildProductSnapshot } = require("../src/services/eventSnapshots");
@@ -108,6 +112,156 @@ describe("idempotency executor failure and storage boundaries", () => {
       responseBody: body,
       responseSizeBytes: limit,
     });
+  });
+
+  it("preserves unrelated same-name fields during generic serialization", () => {
+    const body = {
+      message: "diagnostic",
+      data: {
+        unrelated: {
+          reference: "documentation-reference",
+          reason: "diagnostic-reason",
+          deactivationReason: "workflow-explanation",
+          archiveReason: "retention-explanation",
+        },
+      },
+    };
+
+    expect(serializeResponse(body, 4096)).toEqual({
+      responseBody: body,
+      responseSizeBytes: Buffer.byteLength(JSON.stringify(body), "utf8"),
+    });
+  });
+
+  it("minimizes Product and Warehouse annotations only at resource paths", () => {
+    const diagnostic = {
+      reference: "documentation-reference",
+      reason: "diagnostic-reason",
+      deactivationReason: "workflow-explanation",
+      archiveReason: "retention-explanation",
+    };
+    const productBody = {
+      message: "deactivated",
+      data: {
+        name: "Normal Product name",
+        description: "Seasonal inventory adjustment",
+        deactivationReason: "Cycle count correction",
+        archiveReason: "Retired catalog item",
+        reasonCode: "PRODUCT_DEACTIVATED",
+        diagnostic,
+      },
+    };
+    const warehouseBody = {
+      message: "deactivated",
+      data: {
+        code: "WH-001",
+        deactivationReason: "Maintenance",
+        archiveReason: "unclassified warehouse field",
+        diagnostic,
+      },
+    };
+
+    const minimizedProduct = minimizeMutationResponse(
+      operations.PRODUCT_DEACTIVATE,
+      productBody
+    );
+    const minimizedWarehouse = minimizeMutationResponse(
+      operations.WAREHOUSE_DEACTIVATE,
+      warehouseBody
+    );
+
+    expect(minimizedProduct.data).toEqual({
+      name: "Normal Product name",
+      description: "Seasonal inventory adjustment",
+      reasonCode: "PRODUCT_DEACTIVATED",
+      diagnostic,
+    });
+    expect(minimizedWarehouse.data).toEqual({
+      code: "WH-001",
+      archiveReason: "unclassified warehouse field",
+      diagnostic,
+    });
+    expect(productBody.data).toHaveProperty(
+      "deactivationReason",
+      "Cycle count correction"
+    );
+    expect(warehouseBody.data).toHaveProperty(
+      "deactivationReason",
+      "Maintenance"
+    );
+  });
+
+  it("minimizes single and bulk StockMovement annotations at exact paths", () => {
+    const diagnostic = {
+      reference: "documentation-reference",
+      reason: "diagnostic-reason",
+      deactivationReason: "workflow-explanation",
+      archiveReason: "retention-explanation",
+    };
+    const body = {
+      message: "received",
+      data: {
+        stock: {
+          id: "stock-1",
+          reference: "unclassified stock reference",
+        },
+        stockMovement: {
+          id: "movement-1",
+          reference: "PO-2026-0001",
+          reason: "Supplier packaging delay",
+          diagnostic,
+        },
+      },
+    };
+    const bulkBody = {
+      message: "issued",
+      data: {
+        processedCount: 2,
+        stockMovements: [
+          { id: "movement-2", reference: "SO-001", reason: "Dispatch" },
+          { id: "movement-3", reference: "SO-002", reason: "Transfer" },
+        ],
+        updatedStocks: [{ id: "stock-1", reason: "unclassified stock reason" }],
+        diagnostic,
+      },
+    };
+
+    const minimizedSingle = minimizeMutationResponse(
+      operations.GOODS_RECEIPT_SINGLE,
+      body
+    );
+    const minimizedBulk = minimizeMutationResponse(
+      operations.GOODS_ISSUE_BULK,
+      bulkBody
+    );
+
+    expect(minimizedSingle.data.stockMovement).toEqual({
+      id: "movement-1",
+      diagnostic,
+    });
+    expect(minimizedSingle.data.stock.reference).toBe(
+      "unclassified stock reference"
+    );
+    expect(minimizedBulk.data.stockMovements).toEqual([
+      { id: "movement-2" },
+      { id: "movement-3" },
+    ]);
+    expect(minimizedBulk.data.updatedStocks[0].reason).toBe(
+      "unclassified stock reason"
+    );
+    expect(minimizedBulk.data.diagnostic).toEqual(diagnostic);
+    expect(body.data.stockMovement).toMatchObject({
+      reference: "PO-2026-0001",
+      reason: "Supplier packaging delay",
+    });
+  });
+
+  it("preserves the Product archive message-only response", () => {
+    const body = { message: "Product deleted successfully" };
+
+    expect(
+      minimizeMutationResponse(operations.PRODUCT_ARCHIVE, body)
+    ).toBe(body);
   });
 
   it("executes and replays an approved internal service context through persistence", async () => {

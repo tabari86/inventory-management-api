@@ -22,6 +22,19 @@ const operationIds = new Set(
 );
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
+const minimizeOutboxPayload = (eventType, payload) => {
+  if (
+    eventType === "inventory.stock.received" ||
+    eventType === "inventory.stock.issued"
+  ) {
+    return { ...payload, reference: null };
+  }
+  if (eventType === "catalog.product.archived") {
+    return { ...payload, archiveReason: null };
+  }
+  return payload;
+};
+
 const invalid = (message, cause) =>
   new DomainError({
     code: errorCodes.EVENT_DESCRIPTOR_INVALID,
@@ -190,7 +203,9 @@ const prepareRecords = ({
     }
     changedVersions.add(versionIdentity);
 
-    const payload = definition.payloadBuilder(descriptor.payload);
+    const payload = definition.payloadBuilder(
+      minimizeOutboxPayload(descriptor.eventType, descriptor.payload)
+    );
     assertAggregatePayloadIdentity({ descriptor, payload });
     const boundedPayload = serializeBoundedJson({
       value: payload,

@@ -24,10 +24,8 @@ const buildProductSnapshot = (product) => {
   assignDefined(snapshot, "version", product.version);
   assignDefined(snapshot, "deactivatedAt", isoDate(product.deactivatedAt));
   assignDefined(snapshot, "deactivatedBy", canonicalId(product.deactivatedBy));
-  assignDefined(snapshot, "deactivationReason", product.deactivationReason);
   assignDefined(snapshot, "archivedAt", isoDate(product.archivedAt));
   assignDefined(snapshot, "archivedBy", canonicalId(product.archivedBy));
-  assignDefined(snapshot, "archiveReason", product.archiveReason);
   return snapshot;
 };
 
@@ -40,7 +38,6 @@ const buildWarehouseSnapshot = (warehouse) => {
   assignDefined(snapshot, "version", warehouse.version);
   assignDefined(snapshot, "deactivatedAt", isoDate(warehouse.deactivatedAt));
   assignDefined(snapshot, "deactivatedBy", canonicalId(warehouse.deactivatedBy));
-  assignDefined(snapshot, "deactivationReason", warehouse.deactivationReason);
   return snapshot;
 };
 

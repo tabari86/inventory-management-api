@@ -7,6 +7,9 @@ const Product = require("../models/Product");
 const Stock = require("../models/Stock");
 const StockMovement = require("../models/StockMovement");
 const Warehouse = require("../models/Warehouse");
+const {
+  containsExplicitCredentialMaterial,
+} = require("../utils/durableTextPolicy");
 const withTransaction = require("../utils/transaction");
 const { buildStockSnapshot } = require("./eventSnapshots");
 
@@ -44,6 +47,12 @@ const assertOptionalText = (value, { field, label, max }) => {
     throw validationError(
       field,
       `${label} must be at most ${max} characters long`
+    );
+  }
+  if (containsExplicitCredentialMaterial(value)) {
+    throw validationError(
+      field,
+      `${label} must not contain credential material`
     );
   }
 };
@@ -247,7 +256,6 @@ const recordInventoryTransition = ({
     movementType: type,
     signedQuantityDelta: signedDelta,
   };
-  if (reference !== undefined) metadata.reference = reference;
   if (bulkItemIndex !== undefined) metadata.bulkItemIndex = bulkItemIndex;
 
   eventCollector.recordChange({
