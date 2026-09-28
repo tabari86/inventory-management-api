@@ -27,6 +27,9 @@ const {
   persistAuditOutboxEvents,
 } = require("../src/services/auditOutboxService");
 const inventoryService = require("../src/services/inventoryService");
+const {
+  migrateDatabase: migrateIdempotencyDatabase,
+} = require("../scripts/migrations/phase1IdempotencyIndexes");
 
 require("./setupTestDb");
 
@@ -595,9 +598,9 @@ describe("idempotency executor failure and storage boundaries", () => {
     );
   });
 
-  it("resolves a committed scope in no more than three attempts", async () => {
+  it("bounds a committed processing scope and restores it through one-record repair", async () => {
     const { requestHash, requestHashVersion } = hashCanonicalCommand(command);
-    await IdempotencyRecord.collection.insertOne({
+    const { insertedId } = await IdempotencyRecord.collection.insertOne({
       actorType: context.actor.type,
       actorId: context.actor.id,
       operationId,
@@ -620,5 +623,28 @@ describe("idempotency executor failure and storage boundaries", () => {
     });
     expect(backoff).toHaveBeenCalledTimes(2);
     expect(await Product.countDocuments()).toBe(0);
+
+    await expect(
+      migrateIdempotencyDatabase({
+        db: mongoose.connection.db,
+        repairProcessingRecordId: insertedId.toString(),
+      })
+    ).resolves.toMatchObject({
+      mode: "repair-processing",
+      recordId: insertedId.toString(),
+      deletedCount: 1,
+    });
+
+    await expect(execute()).resolves.toMatchObject({
+      statusCode: 201,
+      replayed: false,
+    });
+    expect(await Product.countDocuments()).toBe(1);
+    expect(await IdempotencyRecord.countDocuments()).toBe(1);
+    expect(
+      await IdempotencyRecord.countDocuments({ state: "completed" })
+    ).toBe(1);
+    expect(await AuditEvent.countDocuments()).toBe(1);
+    expect(await OutboxEvent.countDocuments()).toBe(1);
   });
 });

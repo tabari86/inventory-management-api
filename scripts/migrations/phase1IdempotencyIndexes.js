@@ -13,7 +13,16 @@ const UNIQUE_INDEX_KEY = Object.freeze({
   keyHash: 1,
 });
 const TTL_INDEX_KEY = Object.freeze({ expiresAt: 1 });
-const CLI_USAGE = "Usage: npm run migrate:phase1-idempotency [-- --apply]";
+const PROCESSING_RECORD_SAMPLE_LIMIT = 50;
+const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/i;
+const COMPLETION_EVIDENCE_FIELDS = Object.freeze([
+  "statusCode",
+  "responseBody",
+  "responseSizeBytes",
+  "completedAt",
+]);
+const CLI_USAGE =
+  "Usage: npm run migrate:phase1-idempotency [-- --apply | -- --repair-processing <recordId>]";
 
 const hasExactOrderedKey = (actual = {}, expected) => {
   const actualEntries = Object.entries(actual);
@@ -135,6 +144,18 @@ const parseMigrationArgs = (args) => {
   if (args.length === 1 && args[0] === "--apply") {
     return { mode: "apply", apply: true };
   }
+  if (
+    args.length === 2 &&
+    args[0] === "--repair-processing" &&
+    typeof args[1] === "string" &&
+    OBJECT_ID_PATTERN.test(args[1])
+  ) {
+    return {
+      mode: "repair-processing",
+      apply: false,
+      repairProcessingRecordId: args[1].toLowerCase(),
+    };
+  }
 
   const error = new Error("Invalid migration arguments");
   error.code = "INVALID_MIGRATION_ARGS";
@@ -196,16 +217,198 @@ const countDuplicateScopes = async (db, exists) => {
   return duplicates[0]?.count || 0;
 };
 
-const migrateDatabase = async ({ db, apply = false }) => {
+const isTtlUsableDate = (value) =>
+  value instanceof Date ||
+  (Array.isArray(value) && value.some((item) => item instanceof Date));
+
+const getBsonType = (value) => {
+  if (value === undefined) return "missing";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (value instanceof Date) return "date";
+  if (typeof value === "number") return "double";
+  return typeof value;
+};
+
+const toSafeProcessingDiagnostic = (record) => {
+  const expiresAtType = getBsonType(record.expiresAt);
+  const expiresAtTtlUsable = isTtlUsableDate(record.expiresAt);
+  let expiresAtState = "non-expiring";
+
+  if (expiresAtType === "missing") expiresAtState = "absent";
+  else if (expiresAtType === "null") expiresAtState = "null";
+  else if (expiresAtTtlUsable) expiresAtState = "ttl-usable";
+
+  return {
+    recordId:
+      record._id?._bsontype === "ObjectId" ? record._id.toHexString() : null,
+    operationId:
+      typeof record.operationId === "string"
+        ? record.operationId.slice(0, 160)
+        : null,
+    state: "processing",
+    createdAt: record.createdAt instanceof Date ? record.createdAt : null,
+    expiresAtState,
+    expiresAtType,
+    expiresAtTtlUsable,
+  };
+};
+
+const inspectProcessingRecords = async (db, exists) => {
+  if (!exists) {
+    return {
+      processingRecordCount: 0,
+      nonExpiringProcessingCount: 0,
+      processingRecordSample: [],
+    };
+  }
+
+  const collection = db.collection(COLLECTION_NAME);
+  const processingFilter = { state: "processing" };
+  const nonExpiringFilter = {
+    ...processingFilter,
+    expiresAt: { $not: { $type: "date" } },
+  };
+  const [processingRecordCount, nonExpiringProcessingCount, sample] =
+    await Promise.all([
+      collection.countDocuments(processingFilter),
+      collection.countDocuments(nonExpiringFilter),
+      collection
+        .find(processingFilter, {
+          projection: {
+            _id: 1,
+            operationId: 1,
+            state: 1,
+            createdAt: 1,
+            expiresAt: 1,
+          },
+        })
+        .sort({ _id: 1 })
+        .limit(PROCESSING_RECORD_SAMPLE_LIMIT)
+        .toArray(),
+    ]);
+
+  return {
+    processingRecordCount,
+    nonExpiringProcessingCount,
+    processingRecordSample: sample.map(toSafeProcessingDiagnostic),
+  };
+};
+
+const hasCompletionEvidence = (record) =>
+  COMPLETION_EVIDENCE_FIELDS.some((field) =>
+    Object.prototype.hasOwnProperty.call(record, field)
+  );
+
+const repairProcessingRecord = async ({ db, recordId }) => {
+  if (typeof recordId !== "string" || !OBJECT_ID_PATTERN.test(recordId)) {
+    throw new Error("Invalid idempotency processing repair record ID");
+  }
+
+  const normalizedRecordId = recordId.toLowerCase();
+  const objectId = new mongoose.Types.ObjectId(normalizedRecordId);
+  const collection = db.collection(COLLECTION_NAME);
+  const target = await collection.findOne(
+    { _id: objectId },
+    {
+      projection: {
+        state: 1,
+        expiresAt: 1,
+        statusCode: 1,
+        responseBody: 1,
+        responseSizeBytes: 1,
+        completedAt: 1,
+      },
+    }
+  );
+
+  if (!target) {
+    throw new Error("Idempotency processing repair target was not found");
+  }
+  if (target.state !== "processing") {
+    throw new Error(
+      "Idempotency processing repair target is not in processing state"
+    );
+  }
+  if (isTtlUsableDate(target.expiresAt)) {
+    throw new Error(
+      "Idempotency processing repair target can expire through TTL"
+    );
+  }
+  if (hasCompletionEvidence(target)) {
+    throw new Error(
+      "Idempotency processing repair target has completion evidence"
+    );
+  }
+
+  const evidenceFilter = { "idempotency.recordId": normalizedRecordId };
+  const linkedAudit = await db
+    .collection("auditevents")
+    .findOne(evidenceFilter, { projection: { _id: 1 } });
+  if (linkedAudit) {
+    throw new Error(
+      "Idempotency processing repair target has linked AuditEvent evidence"
+    );
+  }
+
+  const linkedOutbox = await db
+    .collection("outboxevents")
+    .findOne(evidenceFilter, { projection: { _id: 1 } });
+  if (linkedOutbox) {
+    throw new Error(
+      "Idempotency processing repair target has linked OutboxEvent evidence"
+    );
+  }
+
+  const completionEvidenceAbsent = Object.fromEntries(
+    COMPLETION_EVIDENCE_FIELDS.map((field) => [field, { $exists: false }])
+  );
+  const result = await collection.deleteOne({
+    _id: objectId,
+    state: "processing",
+    expiresAt: { $not: { $type: "date" } },
+    ...completionEvidenceAbsent,
+  });
+
+  if (result.deletedCount !== 1) {
+    throw new Error(
+      "Idempotency processing repair target changed; no record was deleted"
+    );
+  }
+
+  return {
+    mode: "repair-processing",
+    database: db.databaseName,
+    recordId: normalizedRecordId,
+    deletedCount: 1,
+  };
+};
+
+const migrateDatabase = async ({
+  db,
+  apply = false,
+  repairProcessingRecordId = null,
+}) => {
+  if (apply && repairProcessingRecordId !== null) {
+    throw new Error(
+      "Idempotency processing repair cannot run during index apply"
+    );
+  }
+  if (repairProcessingRecordId !== null) {
+    return repairProcessingRecord({ db, recordId: repairProcessingRecordId });
+  }
+
   const exists = await collectionExists(db);
   const indexes = await inspectIndexes(db, exists);
   const inspection = classifyIndexes(indexes);
   const duplicateScopeCount = await countDuplicateScopes(db, exists);
+  const processingInspection = await inspectProcessingRecords(db, exists);
   const summary = {
     mode: apply ? "apply" : "dry-run",
     database: db.databaseName,
     collectionExists: exists,
     duplicateScopeCount,
+    ...processingInspection,
     indexes: {
       unique: {
         name: UNIQUE_INDEX_NAME,
@@ -236,6 +439,14 @@ const migrateDatabase = async ({ db, apply = false }) => {
   }
 
   if (!apply) return summary;
+
+  if (processingInspection.nonExpiringProcessingCount > 0) {
+    const error = new Error(
+      "Non-expiring processing idempotency records block safe migration"
+    );
+    error.migrationSummary = summary;
+    throw error;
+  }
 
   if (duplicateScopeCount > 0) {
     const error = new Error(
@@ -269,6 +480,7 @@ const migrateDatabase = async ({ db, apply = false }) => {
 const runMigration = async ({
   uri = process.env.MONGODB_URI,
   apply = false,
+  repairProcessingRecordId = null,
   logger = console,
   createConnection = (connectionUri) =>
     mongoose.createConnection(connectionUri).asPromise(),
@@ -282,7 +494,11 @@ const runMigration = async ({
 
   try {
     connection = await createConnection(uri);
-    result = await migrateDatabase({ db: connection.db, apply });
+    result = await migrateDatabase({
+      db: connection.db,
+      apply,
+      repairProcessingRecordId,
+    });
   } catch (error) {
     primaryError = error;
   }
@@ -317,7 +533,11 @@ const runMigrationCli = async ({
   }
 
   try {
-    await executeMigration({ apply: options.apply, logger });
+    const executionOptions =
+      options.mode === "repair-processing"
+        ? { repairProcessingRecordId: options.repairProcessingRecordId, logger }
+        : { apply: options.apply, logger };
+    await executeMigration(executionOptions);
     return 0;
   } catch (error) {
     logger.error(formatCliError(error));
@@ -336,13 +556,16 @@ module.exports = {
   COLLECTION_NAME,
   TTL_INDEX_KEY,
   TTL_INDEX_NAME,
+  PROCESSING_RECORD_SAMPLE_LIMIT,
   UNIQUE_INDEX_KEY,
   UNIQUE_INDEX_NAME,
   classifyIndexes,
   countDuplicateScopes,
   formatCliError,
+  inspectProcessingRecords,
   migrateDatabase,
   parseMigrationArgs,
+  repairProcessingRecord,
   runMigration,
   runMigrationCli,
 };

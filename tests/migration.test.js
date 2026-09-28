@@ -19,7 +19,6 @@ const insertLegacyGraph = async () => {
   const archivedProductId = new mongoose.Types.ObjectId();
   const warehouseId = new mongoose.Types.ObjectId();
   const stockId = new mongoose.Types.ObjectId();
-  const orphanStockId = new mongoose.Types.ObjectId();
   const movementId = new mongoose.Types.ObjectId();
 
   await db.collection("products").insertMany([
@@ -40,22 +39,13 @@ const insertLegacyGraph = async () => {
     status: "inactive",
     version: 1.5,
   });
-  await db.collection("stocks").insertMany([
-    {
-      _id: stockId,
-      productId: archivedProductId,
-      warehouseId,
-      quantity: 7,
-      status: "active",
-    },
-    {
-      _id: orphanStockId,
-      productId: new mongoose.Types.ObjectId(),
-      warehouseId,
-      quantity: 2,
-      status: "active",
-    },
-  ]);
+  await db.collection("stocks").insertOne({
+    _id: stockId,
+    productId: archivedProductId,
+    warehouseId,
+    quantity: 7,
+    status: "active",
+  });
   await db.collection("stockmovements").insertOne({
     _id: movementId,
     stockId,
@@ -69,8 +59,31 @@ const insertLegacyGraph = async () => {
     archivedProductId,
     warehouseId,
     stockId,
-    orphanStockId,
     movementId,
+  };
+};
+
+const insertOrphanStock = async ({ missingProduct, missingWarehouse }) => {
+  const context = await insertLegacyGraph();
+  const orphanStockId = new mongoose.Types.ObjectId();
+  const missingProductId = new mongoose.Types.ObjectId();
+  const missingWarehouseId = new mongoose.Types.ObjectId();
+
+  await context.db.collection("stocks").insertOne({
+    _id: orphanStockId,
+    productId: missingProduct ? missingProductId : context.productId,
+    warehouseId: missingWarehouse
+      ? missingWarehouseId
+      : context.warehouseId,
+    quantity: 2,
+    status: "active",
+  });
+
+  return {
+    ...context,
+    orphanStockId,
+    missingProductId,
+    missingWarehouseId,
   };
 };
 
@@ -172,7 +185,7 @@ describe("Phase 1 lifecycle/version migration", () => {
       mode: "dry-run",
       products: { invalidVersions: 2 },
       warehouses: { invalidVersions: 1 },
-      stocks: { updatesRequired: 2, orphanCount: 1 },
+      stocks: { updatesRequired: 1, orphanCount: 0 },
       stockMovements: {
         legacyIntegrityRows: 1,
         directReferenceBackfills: 1,
@@ -187,6 +200,124 @@ describe("Phase 1 lifecycle/version migration", () => {
       },
     });
     expect(await captureMigrationState(context.db)).toEqual(before);
+  });
+
+  it.each([
+    {
+      scenario: "missing Product only",
+      missingProduct: true,
+      missingWarehouse: false,
+      missing: ["product"],
+    },
+    {
+      scenario: "missing Warehouse only",
+      missingProduct: false,
+      missingWarehouse: true,
+      missing: ["warehouse"],
+    },
+    {
+      scenario: "missing Product and Warehouse",
+      missingProduct: true,
+      missingWarehouse: true,
+      missing: ["product", "warehouse"],
+    },
+  ])(
+    "blocks apply before every write or index for $scenario",
+    async ({ missingProduct, missingWarehouse, missing }) => {
+      const context = await insertOrphanStock({
+        missingProduct,
+        missingWarehouse,
+      });
+      await context.db
+        .collection("stockmovements")
+        .createIndex({ type: 1 }, { name: "movement_type_lookup" });
+      const before = await captureMigrationState(context.db);
+
+      const dryRun = await migrateDatabase({ db: context.db });
+      expect(dryRun.stocks).toMatchObject({
+        orphanCount: 1,
+        orphans: [{ stockId: context.orphanStockId.toString(), missing }],
+      });
+      expect(await captureMigrationState(context.db)).toEqual(before);
+
+      const error = await captureError(() =>
+        migrateDatabase({ db: context.db, apply: true })
+      );
+
+      expect(error).toMatchObject({
+        message: "Orphan Stock records block safe lifecycle migration",
+        migrationSummary: {
+          mode: "apply",
+          stocks: {
+            orphanCount: 1,
+            orphans: [{ stockId: context.orphanStockId.toString(), missing }],
+          },
+        },
+      });
+      expect(await captureMigrationState(context.db)).toEqual(before);
+    }
+  );
+
+  it("allows normal dry-run and apply after the missing parent is restored", async () => {
+    const context = await insertOrphanStock({
+      missingProduct: true,
+      missingWarehouse: false,
+    });
+    const beforeBlockedApply = await captureMigrationState(context.db);
+
+    const orphanDryRun = await migrateDatabase({ db: context.db });
+    expect(orphanDryRun.stocks).toMatchObject({
+      orphanCount: 1,
+      orphans: [
+        {
+          stockId: context.orphanStockId.toString(),
+          missing: ["product"],
+        },
+      ],
+    });
+    expect(await captureMigrationState(context.db)).toEqual(beforeBlockedApply);
+
+    const blockedError = await captureError(() =>
+      migrateDatabase({ db: context.db, apply: true })
+    );
+    expect(blockedError.message).toBe(
+      "Orphan Stock records block safe lifecycle migration"
+    );
+    expect(blockedError.migrationSummary).toBeDefined();
+    expect(await captureMigrationState(context.db)).toEqual(beforeBlockedApply);
+
+    await context.db.collection("products").insertOne({
+      _id: context.missingProductId,
+      sku: "RESTORED-ORPHAN-PARENT",
+      name: "Restored orphan parent",
+      status: "active",
+      version: 1,
+    });
+    const afterSourceRepair = await captureMigrationState(context.db);
+    const cleanDryRun = await migrateDatabase({ db: context.db });
+    expect(cleanDryRun.stocks.orphanCount).toBe(0);
+    expect(await captureMigrationState(context.db)).toEqual(afterSourceRepair);
+
+    const applied = await migrateDatabase({ db: context.db, apply: true });
+    expect(applied.index.created).toBe(true);
+    const postApplyDryRun = await migrateDatabase({ db: context.db });
+    expect(postApplyDryRun).toMatchObject({
+      products: { invalidVersions: 0 },
+      warehouses: { invalidVersions: 0 },
+      stocks: { updatesRequired: 0, orphanCount: 0 },
+      stockMovements: { directReferenceBackfills: 0 },
+      index: {
+        existingName: MOVEMENT_VERSION_INDEX,
+        alreadyPresent: true,
+        wouldCreate: false,
+        created: false,
+      },
+    });
+
+    const afterFirstApply = await captureMigrationState(context.db);
+    const secondApply = await migrateDatabase({ db: context.db, apply: true });
+    expect(secondApply.index.created).toBe(false);
+    expect(await captureMigrationState(context.db)).toEqual(afterFirstApply);
   });
 
   it("applies safe backfills, leaves historical facts absent, and is idempotent", async () => {
@@ -217,16 +348,6 @@ describe("Phase 1 lifecycle/version migration", () => {
       warehouseLifecycleStatus: "inactive",
     });
 
-    const orphan = await context.db
-      .collection("stocks")
-      .findOne({ _id: context.orphanStockId });
-    expect(orphan).toMatchObject({
-      quantity: 2,
-      version: 1,
-      warehouseLifecycleStatus: "inactive",
-    });
-    expect(orphan).not.toHaveProperty("productLifecycleStatus");
-
     const movement = await context.db
       .collection("stockmovements")
       .findOne({ _id: context.movementId });
@@ -245,7 +366,7 @@ describe("Phase 1 lifecycle/version migration", () => {
     expect(rerun).toMatchObject({
       products: { invalidVersions: 0 },
       warehouses: { invalidVersions: 0 },
-      stocks: { updatesRequired: 0, orphanCount: 1 },
+      stocks: { updatesRequired: 0, orphanCount: 0 },
       stockMovements: { directReferenceBackfills: 0 },
       index: {
         existingName: MOVEMENT_VERSION_INDEX,

@@ -61,9 +61,10 @@ output.
 - Derives `productLifecycleStatus` as `active`, `inactive`, or `archived` and
   `warehouseLifecycleStatus` as `active` or `inactive` when the referenced
   parent exists.
-- Reports orphan Stock IDs and which parent is missing. It does not delete or
-  invent a replacement parent. An unresolved guard remains absent and inventory
-  enforcement therefore fails closed.
+- Dry-run reports every orphan Stock ID and whether its Product, Warehouse, or
+  both parents are missing. An unresolved orphan blocks apply before any
+  document write or index creation. The migration does not delete the Stock,
+  fabricate a parent, relink it, or infer a default lifecycle state.
 - Reports legacy movements missing integrity context and backfills only direct
   `productId`/`warehouseId` values safely derivable from their Stock relation.
 - Does not invent `quantityBefore`, `quantityAfter`, `aggregateVersion`, or
@@ -84,8 +85,10 @@ deletes domain data.
 1. Prepare migration-compatible application code without enabling traffic that
    depends on populated guards.
 2. Run the dry-run against the intended environment.
-3. Investigate every orphan and duplicate candidate report.
-4. Run apply only after the preflight is clean and approved.
+3. Resolve every orphan in the source data and investigate every duplicate
+   candidate; there is no automatic orphan repair or override.
+4. Re-run dry-run, then run apply only after the preflight is clean and
+   approved.
 5. Deploy or enable lifecycle enforcement according to the environment's
    rollout model.
 6. Smoke-test Product archive, Stock creation, Goods Receipt, Goods Issue, and
@@ -122,25 +125,58 @@ Apply requires exactly the explicit flag:
 npm run migrate:phase1-idempotency -- --apply
 ```
 
-The migration inspects collection/index state and valid duplicate scopes. It
-requires a unique index on
+The migration inspects collection/index state, valid duplicate scopes, and
+committed `processing` records. A durable `processing` record is abnormal: the
+supported runtime creates that state inside a transaction and commits it only
+after transition to `completed`. Dry-run reports `processingRecordCount`,
+`nonExpiringProcessingCount`, and a bounded safe diagnostic sample. A
+`processing` row with absent, null, or otherwise TTL-unusable `expiresAt` can
+hold its unique scope indefinitely, so it blocks apply before any index write.
+A `processing` row with a TTL-usable BSON Date remains abnormal and is reported,
+but is not a non-expiring blocker.
+
+The migration requires a unique index on
 `{ actorType: 1, actorId: 1, operationId: 1, keyHash: 1 }` and a single-field
 TTL index on `{ expiresAt: 1 }` with `expireAfterSeconds: 0`. Equivalent indexes
 under alternate names are accepted. Incompatible reserved names, wrong key
 order/direction, non-unique scope indexes, wrong TTL values, compound TTL
-definitions, or duplicate valid scopes block apply. The tool never drops,
-renames, repairs, deletes, or fabricates data.
+definitions, duplicate valid scopes, or non-expiring `processing` rows block
+normal apply. Normal apply never repairs or deletes records.
+
+After separately reviewing one exact abnormal row, an operator may repair only
+that selected non-expiring `processing` record:
+
+```bash
+npm run migrate:phase1-idempotency -- --repair-processing <recordId>
+```
+
+The target must be an exact record ID, still exist in `processing`, still be
+non-expiring, and have none of `statusCode`, `responseBody`,
+`responseSizeBytes`, or `completedAt`, even with a null value. Any linked
+AuditEvent or OutboxEvent at `idempotency.recordId`, any completion-like field,
+or a TTL-usable expiry makes the target ineligible and preserves it for manual
+investigation. The conditional delete rechecks eligibility and must delete
+exactly that one IdempotencyRecord; it never deletes Audit/Outbox evidence or
+performs a wildcard or mass cleanup.
+
+Run this operator procedure only after confirming the target database and
+record ID, with no concurrent repair of that record. Quiesce normal production
+mutation traffic for the repair window when needed to eliminate ambiguity.
+After a successful repair, re-run dry-run and then normal apply. This procedure
+adds no runtime cleanup worker, lease, heartbeat, or request/startup cleanup.
 
 The production rollout order is:
 
 1. Deploy the idempotency migration tooling.
 2. Run the dry-run against the intended database.
-3. Inspect the safe summary and resolve blockers through a separately reviewed
-   data/index operation.
-4. Run the explicit apply command.
-5. Verify both required index semantics.
-6. Deploy the application code.
-7. Smoke-test an original keyed mutation, replay, conflict, and an unkeyed call.
+3. Inspect the safe summary. Resolve index/duplicate blockers separately and,
+   for an eligible abnormal non-expiring row, use only the reviewed one-record
+   repair procedure above.
+4. Re-run dry-run and confirm the non-expiring processing blocker count is zero.
+5. Run the explicit apply command.
+6. Verify both required index semantics.
+7. Deploy the application code.
+8. Smoke-test an original keyed mutation, replay, conflict, and an unkeyed call.
 
 Production execution of this migration was not independently established in
 this WP8 session. Completed records expire seven days after completion, but the
@@ -287,10 +323,11 @@ reviewed before each apply.
 - **Expected apply:** converge invalid aggregate versions to `1`, derive guards
   for resolvable parents, add only derivable direct movement references, and
   create the compatible partial unique index when absent.
-- **Blocking conditions:** duplicate numeric movement versions or an
-  incompatible owned index stop apply before updates. Orphans are not deleted
-  or fabricated and block safe lifecycle rollout because runtime guards fail
-  closed.
+- **Blocking conditions:** an unresolved orphan, duplicate numeric movement
+  versions, or an incompatible owned index stops apply before every document
+  write and index creation. Orphans are never automatically deleted,
+  fabricated, or relinked; operators resolve source data and re-run dry-run
+  before apply.
 - **Re-run and verification:** re-running is idempotent. Run post-apply dry-run,
   confirm applicable invalid counts are zero, review every orphan/legacy count,
   inspect partial-index semantics, and smoke-test lifecycle, Stock creation,
@@ -301,18 +338,30 @@ reviewed before each apply.
 ### Idempotency-index acceptance
 
 - **Affected collection:** `idempotencyrecords`.
-- **Prerequisites:** lifecycle migration complete, index privileges, and review
-  of existing records for duplicate valid scopes.
-- **Expected dry-run:** collection existence, duplicate-scope count, and state
-  of the ordered unique scope index and single-field TTL index; no write.
+- **Prerequisites:** lifecycle migration complete, index privileges, review of
+  existing records for duplicate valid scopes, and review of every abnormal
+  durable `processing` diagnostic.
+- **Expected dry-run:** collection existence, duplicate-scope count,
+  `processingRecordCount`, `nonExpiringProcessingCount`, a bounded safe sample,
+  and state of the ordered unique scope index and single-field TTL index; no
+  write.
 - **Expected apply:** create only missing compatible indexes. If the collection
   is absent, MongoDB may create it with the first index; documents are not
   modified.
 - **Blocking conditions:** duplicate valid scopes, incompatible reserved or
-  related indexes, wrong uniqueness/key order, or wrong TTL semantics.
+  related indexes, wrong uniqueness/key order, wrong TTL semantics, or any
+  non-expiring `processing` row. Normal apply never repairs records.
+- **One-record repair:** use `--repair-processing <recordId>` only for an exact,
+  reviewed row that is still non-expiring `processing`, lacks every
+  completion-like field, and has no linked AuditEvent or OutboxEvent. A
+  TTL-usable expiry or ambiguous evidence refuses deletion. Require a reviewed
+  database, no concurrent repair of the row, and quiesced mutation traffic when
+  necessary; no automatic or mass repair exists.
 - **Re-run and verification:** semantically equivalent alternate names are
-  accepted. Run post-apply dry-run, inspect both index definitions, and test an
-  original keyed mutation, replay, conflict, and unkeyed mutation.
+  accepted. After repair, re-run dry-run before apply. Run post-apply dry-run,
+  inspect both index definitions, and test an original keyed mutation, replay,
+  conflict, and unkeyed mutation. No runtime worker, lease, or heartbeat is part
+  of this procedure.
 - **Rollback limitation:** removing either index can permit duplicate execution
   or prevent expiry cleanup and requires a separate approved procedure.
 

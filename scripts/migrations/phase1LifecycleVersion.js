@@ -317,6 +317,14 @@ const migrateDatabase = async ({ db, apply = false }) => {
 
   if (!apply) return summary;
 
+  if (summary.stocks.orphanCount > 0) {
+    const error = new Error(
+      "Orphan Stock records block safe lifecycle migration"
+    );
+    error.migrationSummary = summary;
+    throw error;
+  }
+
   if (duplicateMovementVersions.length > 0) {
     const error = new Error(
       "Duplicate Stock/aggregateVersion candidates block safe index creation"
